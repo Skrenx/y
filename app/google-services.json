@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "878472205936",
+    "project_id": "firegrid-58bc3",
+    "storage_bucket": "firegrid-58bc3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:878472205936:android:10122ced4f8861332ac6b5",
+        "android_client_info": {
+          "package_name": "com.example.hydrant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDnoY9A2QIuW1XyjZyhT-rS58xqDn1OTbs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
