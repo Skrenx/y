@@ -57,6 +57,199 @@ import com.google.firebase.auth.userProfileChangeRequest
 import kotlinx.coroutines.launch
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+// Weather Data Classes
+data class WeatherResponse(
+    val main: Main,
+    val weather: List<Weather>,
+    val wind: Wind
+)
+
+data class ForecastResponse(
+    val list: List<ForecastItem>
+)
+
+data class ForecastItem(
+    val main: Main,
+    val weather: List<Weather>,
+    val wind: Wind,
+    val dt_txt: String
+)
+
+data class Main(
+    val temp: Double,
+    val humidity: Int,
+    val temp_min: Double,
+    val temp_max: Double
+)
+
+data class Weather(
+    val main: String,
+    val description: String
+)
+
+data class Wind(
+    val speed: Double
+)
+
+data class DailyWeather(
+    val temp: Double,
+    val tempMin: Double,
+    val tempMax: Double,
+    val humidity: Int,
+    val windSpeed: Double,
+    val condition: String
+)
+
+// Weather API Functions
+suspend fun fetchWeatherData(municipalityName: String): DailyWeather? {
+    val apiKey = "4bc22a06c908152ed3f0a3a89613b138"
+    // Using 5-day forecast API to get daily min/max temperatures
+    val url = "https://api.openweathermap.org/data/2.5/forecast?q=$municipalityName,Laguna,PH&units=metric&appid=$apiKey"
+
+    return withContext(Dispatchers.IO) {
+        try {
+            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val responseCode = connection.responseCode
+            if (responseCode == java.net.HttpURLConnection.HTTP_OK) {
+                val response = connection.inputStream.bufferedReader().use { it.readText() }
+                parseForecastJson(response)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+}
+
+fun parseForecastJson(json: String): DailyWeather? {
+    return try {
+        // Get today's date to filter forecast items
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            .format(java.util.Date())
+
+        // Extract all forecast items
+        val listPattern = """"list":\[(.*?)\]""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val listMatch = listPattern.find(json) ?: return null
+        val listContent = listMatch.groupValues[1]
+
+        // Split by objects (each forecast entry)
+        val entries = listContent.split("\"dt_txt\"").drop(1)
+
+        var minTemp = Double.MAX_VALUE
+        var maxTemp = Double.MIN_VALUE
+        var currentTemp = 0.0
+        var avgHumidity = 0
+        var avgWindSpeed = 0.0
+        var condition = "Clear"
+        var count = 0
+        var tempCount = 0
+
+        for (entry in entries) {
+            // Check if this entry is for today or tomorrow (to get full range)
+            val dateRegex = """:\s*"([^"]+)"""".toRegex()
+            val dateMatch = dateRegex.find(entry)
+            val entryDate = dateMatch?.groupValues?.get(1) ?: continue
+
+            // Only process today's and tomorrow's first few forecasts
+            if (!entryDate.startsWith(today)) {
+                if (count > 0) break // Stop after processing today's data
+                continue
+            }
+
+            // Extract all temperature values from this forecast entry
+            val tempRegex = """"temp":\s*([\d.]+)""".toRegex()
+            val tempMatches = tempRegex.findAll(entry).toList()
+
+            for (tempMatch in tempMatches) {
+                val temp = tempMatch.groupValues[1].toDoubleOrNull() ?: continue
+                minTemp = minOf(minTemp, temp)
+                maxTemp = maxOf(maxTemp, temp)
+                if (tempCount == 0) currentTemp = temp
+                tempCount++
+            }
+
+            // Extract temp_min
+            val tempMinRegex = """"temp_min":\s*([\d.]+)""".toRegex()
+            tempMinRegex.findAll(entry).forEach { match ->
+                val tMin = match.groupValues[1].toDoubleOrNull()
+                if (tMin != null) minTemp = minOf(minTemp, tMin)
+            }
+
+            // Extract temp_max
+            val tempMaxRegex = """"temp_max":\s*([\d.]+)""".toRegex()
+            tempMaxRegex.findAll(entry).forEach { match ->
+                val tMax = match.groupValues[1].toDoubleOrNull()
+                if (tMax != null) maxTemp = maxOf(maxTemp, tMax)
+            }
+
+            // Extract humidity (first occurrence in this entry)
+            val humidityRegex = """"humidity":\s*(\d+)""".toRegex()
+            val humidity = humidityRegex.find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+            // Extract wind speed (first occurrence in this entry)
+            val windRegex = """"speed":\s*([\d.]+)""".toRegex()
+            val windSpeed = windRegex.find(entry)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+
+            // Extract weather condition (only from first entry)
+            if (count == 0) {
+                val weatherRegex = """"main":\s*"([^"]+)"""".toRegex()
+                condition = weatherRegex.find(entry)?.groupValues?.get(1) ?: "Clear"
+            }
+
+            avgHumidity += humidity
+            avgWindSpeed += windSpeed
+            count++
+        }
+
+        if (count == 0 || minTemp == Double.MAX_VALUE || maxTemp == Double.MIN_VALUE) {
+            // Fallback: use first available forecast data
+            val tempRegex = """"temp":\s*([\d.]+)""".toRegex()
+            val temp = tempRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: 28.0
+
+            val tempMinRegex = """"temp_min":\s*([\d.]+)""".toRegex()
+            minTemp = tempMinRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: (temp - 3)
+
+            val tempMaxRegex = """"temp_max":\s*([\d.]+)""".toRegex()
+            maxTemp = tempMaxRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: (temp + 3)
+
+            val humidityRegex = """"humidity":\s*(\d+)""".toRegex()
+            avgHumidity = humidityRegex.find(json)?.groupValues?.get(1)?.toIntOrNull() ?: 70
+
+            val windRegex = """"speed":\s*([\d.]+)""".toRegex()
+            avgWindSpeed = windRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: 3.0
+
+            val weatherRegex = """"main":\s*"([^"]+)"""".toRegex()
+            condition = weatherRegex.find(json)?.groupValues?.get(1) ?: "Clear"
+
+            currentTemp = temp
+            count = 1
+        } else {
+            avgHumidity /= count
+            avgWindSpeed /= count
+        }
+
+        DailyWeather(
+            temp = if (currentTemp > 0) currentTemp else (minTemp + maxTemp) / 2,
+            tempMin = minTemp,
+            tempMax = maxTemp,
+            humidity = avgHumidity,
+            windSpeed = avgWindSpeed,
+            condition = condition
+        )
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
 
 // Helper function to validate password
 fun validatePassword(password: String): String? {
@@ -601,6 +794,8 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
     var selectedMunicipality by rememberSaveable { mutableStateOf<String?>(null) }
 
+    val favoritesScrollState = androidx.compose.foundation.lazy.rememberLazyListState()
+
     if (selectedMunicipality != null) {
         MunicipalityDetailScreen(
             municipalityName = selectedMunicipality!!,
@@ -629,6 +824,7 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                     AppDestinations.HOME -> MapScreen(modifier = Modifier.padding(innerPadding))
                     AppDestinations.FAVORITES -> FavoritesScreen(
                         modifier = Modifier.padding(innerPadding),
+                        scrollState = favoritesScrollState,
                         onMunicipalityClick = { municipality ->
                             selectedMunicipality = municipality
                         }
@@ -650,13 +846,50 @@ fun MunicipalityDetailScreen(
     municipalityName: String,
     onBack: () -> Unit
 ) {
-    val temperature = remember { 65 }
-    val condition = remember { "Clouds" }
-    val lowHigh = remember { "63° / 66°" }
-    val humidity = remember { "88%" }
-    val windSpeed = remember { "10 mph" }
+    var weatherData by remember { mutableStateOf<DailyWeather?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    var showAddHydrantDialog by remember { mutableStateOf(false) }
+    var hydrantAdded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(municipalityName) {
+        isLoading = true
+        errorMessage = null
+        scope.launch {
+            val data = fetchWeatherData(municipalityName)
+            if (data != null) {
+                weatherData = data
+            } else {
+                errorMessage = "Unable to fetch weather data"
+            }
+            isLoading = false
+        }
+    }
+
+    val temperature = weatherData?.temp?.toInt() ?: 65
+    val condition = weatherData?.condition ?: "Loading..."
+    val tempMin = weatherData?.tempMin?.toInt() ?: 63
+    val tempMax = weatherData?.tempMax?.toInt() ?: 66
+    // Show daily low/high forecast temperatures
+    val lowHigh = "$tempMin° / $tempMax°"
+    val humidity = "${weatherData?.humidity ?: 0}%"
+    // Convert wind speed from m/s to km/h (multiply by 3.6)
+    val windSpeedKmh = ((weatherData?.windSpeed ?: 0.0) * 3.6).toInt()
+    val windSpeed = "$windSpeedKmh km/h"
     val outOfService = remember { 0 }
     val inService = remember { 0 }
+
+    if (showAddHydrantDialog) {
+        AddFireHydrantDialog(
+            onDismiss = { showAddHydrantDialog = false },
+            onConfirm = {
+                hydrantAdded = true
+                showAddHydrantDialog = false
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -709,28 +942,41 @@ fun MunicipalityDetailScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Text(
-                            text = "$temperature°",
-                            style = MaterialTheme.typography.displayLarge,
-                            fontSize = 72.sp,
-                            fontWeight = FontWeight.Light
-                        )
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(48.dp),
+                                color = Color(0xFFFF6B35)
+                            )
+                        } else if (errorMessage != null) {
+                            Text(
+                                text = errorMessage ?: "Error",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        } else {
+                            Text(
+                                text = "$temperature°C",
+                                style = MaterialTheme.typography.displayLarge,
+                                fontSize = 72.sp,
+                                fontWeight = FontWeight.Light
+                            )
 
-                        Text(
-                            text = condition,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = Color(0xFF666666)
-                        )
+                            Text(
+                                text = condition,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color(0xFF666666)
+                            )
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            WeatherDetail("Low / High", lowHigh)
-                            WeatherDetail("Humidity", humidity)
-                            WeatherDetail("Wind", windSpeed)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                WeatherDetail("Low / High", lowHigh)
+                                WeatherDetail("Humidity", humidity)
+                                WeatherDetail("Wind", windSpeed)
+                            }
                         }
                     }
                 }
@@ -803,18 +1049,18 @@ fun MunicipalityDetailScreen(
 
             item {
                 Button(
-                    onClick = { },
+                    onClick = { showAddHydrantDialog = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .height(56.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF81C784)
+                        containerColor = if (hydrantAdded) Color(0xFF4CAF50) else Color(0xFF81C784)
                     ),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        "Add Fire Hydrant",
+                        if (hydrantAdded) "Added ✓" else "Add Fire Hydrant",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Medium
                     )
@@ -883,6 +1129,207 @@ fun WeatherDetail(label: String, value: String) {
             fontWeight = FontWeight.Medium
         )
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddFireHydrantDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    var hydrantName by remember { mutableStateOf("") }
+    var exactLocation by remember { mutableStateOf("") }
+    var latitude by remember { mutableStateOf("") }
+    var longitude by remember { mutableStateOf("") }
+    var typeColor by remember { mutableStateOf("") }
+    var serviceStatus by remember { mutableStateOf("In Service") }
+    var remarks by remember { mutableStateOf("") }
+    var expanded by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                "Add Fire Hydrant",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 500.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                item {
+                    Column {
+                        Text(
+                            "Hydrant Name",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        OutlinedTextField(
+                            value = hydrantName,
+                            onValueChange = { hydrantName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Enter hydrant name") },
+                            singleLine = true
+                        )
+                    }
+                }
+
+                item {
+                    Column {
+                        Text(
+                            "Exact Location",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        OutlinedTextField(
+                            value = exactLocation,
+                            onValueChange = { exactLocation = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Enter exact location") },
+                            singleLine = true
+                        )
+                    }
+                }
+
+                item {
+                    Column {
+                        Text(
+                            "Coordinates",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = latitude,
+                                onValueChange = { latitude = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("Latitude") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                            )
+                            OutlinedTextField(
+                                value = longitude,
+                                onValueChange = { longitude = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("Longitude") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Column {
+                        Text(
+                            "Type/Color",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        OutlinedTextField(
+                            value = typeColor,
+                            onValueChange = { typeColor = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Enter type/color") },
+                            singleLine = true
+                        )
+                    }
+                }
+
+                item {
+                    Column {
+                        Text(
+                            "Service Status",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        ExposedDropdownMenuBox(
+                            expanded = expanded,
+                            onExpandedChange = { expanded = !expanded }
+                        ) {
+                            OutlinedTextField(
+                                value = serviceStatus,
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(),
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                                }
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("In Service") },
+                                    onClick = {
+                                        serviceStatus = "In Service"
+                                        expanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Out of Service") },
+                                    onClick = {
+                                        serviceStatus = "Out of Service"
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Column {
+                        Text(
+                            "Remarks",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        OutlinedTextField(
+                            value = remarks,
+                            onValueChange = { remarks = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Enter remarks (optional)") },
+                            minLines = 3,
+                            maxLines = 5
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF81C784)
+                )
+            ) {
+                Text("Add Fire Hydrant")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
@@ -1069,7 +1516,11 @@ fun getCurrentLocation(
 }
 
 @Composable
-fun FavoritesScreen(modifier: Modifier = Modifier, onMunicipalityClick: (String) -> Unit) {
+fun FavoritesScreen(
+    modifier: Modifier = Modifier,
+    scrollState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.foundation.lazy.rememberLazyListState(),
+    onMunicipalityClick: (String) -> Unit
+) {
     val municipalities = listOf(
         "Alaminos", "Bay", "Biñan", "Cabuyao", "Calamba", "Calauan",
         "Cavinti", "Famy", "Kalayaan", "Liliw", "Los Baños", "Luisiana",
@@ -1100,6 +1551,7 @@ fun FavoritesScreen(modifier: Modifier = Modifier, onMunicipalityClick: (String)
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            state = scrollState,
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
