@@ -58,13 +58,14 @@ dependencies {
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.maps.android:maps-compose:4.3.3")
 
-    // Google Play Services Location (NEW - for My Location feature)
+    // Google Play Services Location
     implementation("com.google.android.gms:play-services-location:21.0.1")
 
-    // Firebase dependencies
-    implementation(platform("com.google.firebase:firebase-bom:34.6.0"))
+    // Firebase BOM - Single declaration manages all Firebase versions
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-analytics")
-    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.firebase:firebase-database-ktx")
 
     // Coroutines for async operations
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
@@ -76,6 +77,7 @@ dependencies {
     // Retrofit for API calls
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("androidx.compose.material:material-icons-extended")
 
     // Test dependencies
     testImplementation(libs.junit)
