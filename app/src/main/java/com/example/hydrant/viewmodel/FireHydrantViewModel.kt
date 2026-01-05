@@ -14,7 +14,7 @@ import kotlinx.coroutines.tasks.await
 
 data class HydrantUiState(
     val hydrants: List<FireHydrant> = emptyList(),
-    val allHydrants: List<FireHydrant> = emptyList(),  // NEW: For all hydrants across municipalities
+    val allHydrants: List<FireHydrant> = emptyList(),
     val inServiceCount: Int = 0,
     val outOfServiceCount: Int = 0,
     val isLoading: Boolean = false,
@@ -55,9 +55,6 @@ class FireHydrantViewModel : ViewModel() {
         }
     }
 
-    /**
-     * NEW: Load all hydrants from all municipalities for finding nearest hydrant
-     */
     fun loadAllHydrants() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
@@ -82,7 +79,6 @@ class FireHydrantViewModel : ViewModel() {
                             for (childSnapshot in snapshot.children) {
                                 val hydrant = childSnapshot.getValue(FireHydrant::class.java)
                                 if (hydrant != null) {
-                                    // Ensure the ID is set from the key if not present
                                     val hydrantWithId = if (hydrant.id.isEmpty()) {
                                         hydrant.copy(id = childSnapshot.key ?: "")
                                     } else {
@@ -93,7 +89,6 @@ class FireHydrantViewModel : ViewModel() {
                             }
                         }
                     } catch (e: Exception) {
-                        // Continue with next municipality if one fails
                         e.printStackTrace()
                     }
                 }
@@ -112,8 +107,9 @@ class FireHydrantViewModel : ViewModel() {
         }
     }
 
+    // Updated: hydrantName parameter is now ignored - name is auto-generated in repository
     fun addFireHydrant(
-        hydrantName: String,
+        hydrantName: String = "", // This is now ignored, kept for compatibility
         exactLocation: String,
         latitude: String,
         longitude: String,
@@ -126,7 +122,7 @@ class FireHydrantViewModel : ViewModel() {
             _uiState.value = _uiState.value.copy(isLoading = true, addSuccess = false)
 
             val hydrant = FireHydrant(
-                hydrantName = hydrantName,
+                hydrantName = "", // Will be auto-generated in repository
                 exactLocation = exactLocation,
                 latitude = latitude,
                 longitude = longitude,
@@ -208,26 +204,18 @@ class FireHydrantViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Deletes a hydrant and renumbers all subsequent hydrants.
-     * For example, if Id_2 is deleted, Id_3 becomes Id_2, Id_4 becomes Id_3, etc.
-     * This version works with Firebase Realtime Database using fire_hydrants path.
-     */
     fun deleteHydrantAndRenumber(municipality: String, hydrantId: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, deleteSuccess = false)
 
             try {
-                // Using fire_hydrants path to match your database rules
                 val hydrantsRef = database.getReference("fire_hydrants")
                     .child(municipality)
 
-                // Get the numeric part of the deleted ID (e.g., "Id_2" -> 2)
                 val idWithoutPrefix = hydrantId.removePrefix("Id_")
                 val deletedIdNumber: Int? = idWithoutPrefix.toIntOrNull()
 
                 if (deletedIdNumber == null) {
-                    // If ID format is different, just do simple delete
                     hydrantsRef.child(hydrantId).removeValue().await()
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -239,13 +227,10 @@ class FireHydrantViewModel : ViewModel() {
                     return@launch
                 }
 
-                // First, delete the hydrant
                 hydrantsRef.child(hydrantId).removeValue().await()
 
-                // Get all hydrants to find ones with higher ID numbers
                 val snapshot = hydrantsRef.get().await()
 
-                // Create a list of hydrants that need to be renumbered
                 val hydrantsToRenumber = ArrayList<Triple<String, Int, DataSnapshot>>()
 
                 if (snapshot.exists()) {
@@ -259,10 +244,8 @@ class FireHydrantViewModel : ViewModel() {
                     }
                 }
 
-                // Sort by ID number (ascending)
                 hydrantsToRenumber.sortBy { it.second }
 
-                // Renumber each hydrant (process in order from lowest to highest)
                 for (triple in hydrantsToRenumber) {
                     val oldId = triple.first
                     val oldIdNumber = triple.second
@@ -271,24 +254,22 @@ class FireHydrantViewModel : ViewModel() {
                     val newIdNumber = oldIdNumber - 1
                     val newId = "Id_$newIdNumber"
 
-                    // Get the data as a map
+                    // Auto-generate new hydrant name based on new ID
+                    val newHydrantName = "Hydrant Id_$newIdNumber"
+
                     val data = childSnapshot.value
 
                     if (data != null && data is Map<*, *>) {
-                        // Create new HashMap and copy data
                         val updatedData = HashMap<String, Any?>()
                         for ((key, value) in data) {
                             if (key is String) {
                                 updatedData[key] = value
                             }
                         }
-                        // Update the id field
                         updatedData["id"] = newId
+                        updatedData["hydrantName"] = newHydrantName // Update hydrant name too
 
-                        // Create new node with new ID
                         hydrantsRef.child(newId).setValue(updatedData).await()
-
-                        // Delete old node
                         hydrantsRef.child(oldId).removeValue().await()
                     }
                 }
@@ -299,7 +280,6 @@ class FireHydrantViewModel : ViewModel() {
                     error = null
                 )
 
-                // Reload hydrants to reflect changes
                 loadHydrants(municipality)
                 loadHydrantCounts(municipality)
 

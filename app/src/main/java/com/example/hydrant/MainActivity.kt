@@ -1117,14 +1117,6 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
     }
 }
 
-// Replace your existing FireHydrantListScreen function with this one:
-
-// Replace your existing FireHydrantListScreen function with this one:
-
-// Replace your existing FireHydrantListScreen function with this one:
-
-// Replace your existing FireHydrantListScreen function with this one:
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FireHydrantListScreen(
@@ -1158,10 +1150,16 @@ fun FireHydrantListScreen(
     }
 
     val filteredHydrants = hydrantUiState.hydrants.filter { hydrant ->
+        // Search ALL fields EXCEPT municipality (already filtered by selection from Home)
         val matchesSearch = searchQuery.isEmpty() ||
                 hydrant.hydrantName.contains(searchQuery, ignoreCase = true) ||
                 hydrant.exactLocation.contains(searchQuery, ignoreCase = true) ||
-                hydrant.id.contains(searchQuery, ignoreCase = true)
+                hydrant.id.contains(searchQuery, ignoreCase = true) ||
+                hydrant.typeColor.contains(searchQuery, ignoreCase = true) ||
+                hydrant.serviceStatus.contains(searchQuery, ignoreCase = true) ||
+                hydrant.latitude.contains(searchQuery, ignoreCase = true) ||
+                hydrant.longitude.contains(searchQuery, ignoreCase = true) ||
+                hydrant.remarks.contains(searchQuery, ignoreCase = true)
 
         val matchesFilter = when (selectedFilter) {
             "In Service" -> hydrant.serviceStatus == "In Service"
@@ -1178,7 +1176,7 @@ fun FireHydrantListScreen(
         matchesSearch && matchesFilter && matchesInvalidFilter
     }
 
-    // Reusable Filter Dropdown Menu content - NO heart on "All"
+    // Reusable Filter Dropdown Menu content
     @Composable
     fun FilterDropdownContent() {
         DropdownMenuItem(
@@ -1235,13 +1233,12 @@ fun FireHydrantListScreen(
             Column {
                 TopAppBar(
                     title = {
-                        // For Invalid Coordinates with search active - show search field in title
                         if (showInvalidCoordinatesOnly && isSearchActive) {
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
                                 placeholder = {
-                                    Text("Search...", color = Color.Gray)
+                                    Text("Search", color = Color.Gray)
                                 },
                                 leadingIcon = {
                                     Icon(
@@ -1294,9 +1291,7 @@ fun FireHydrantListScreen(
                         }
                     },
                     actions = {
-                        // Only show action buttons for Invalid Coordinates view when search is NOT active
                         if (showInvalidCoordinatesOnly && !isSearchActive) {
-                            // Search icon button (white background, like Home screen)
                             IconButton(
                                 onClick = { isSearchActive = true },
                                 modifier = Modifier
@@ -1311,7 +1306,6 @@ fun FireHydrantListScreen(
                                 )
                             }
 
-                            // Filter button - arrow only, NO box/background
                             Box {
                                 IconButton(
                                     onClick = { filterExpanded = true },
@@ -1349,7 +1343,7 @@ fun FireHydrantListScreen(
                 .padding(padding)
                 .background(Color(0xFFF5F5F5))
         ) {
-            // Search bar and Filter button BELOW header - Only for regular Fire Hydrant Lists
+            // Search bar and Filter button - Only for regular Fire Hydrant Lists
             if (!showInvalidCoordinatesOnly) {
                 Row(
                     modifier = Modifier
@@ -1359,12 +1353,11 @@ fun FireHydrantListScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Search TextField
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         placeholder = {
-                            Text("Search...", color = Color.Gray)
+                            Text("Search", color = Color.Gray)
                         },
                         leadingIcon = {
                             Icon(
@@ -1386,7 +1379,6 @@ fun FireHydrantListScreen(
                         )
                     )
 
-                    // Filter Button with Dropdown - shows "Filter" text with arrow
                     Box {
                         Button(
                             onClick = { filterExpanded = true },
@@ -1439,7 +1431,6 @@ fun FireHydrantListScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.weight(1f)
                         ) {
-                            // Warning icon using text emoji
                             Text(
                                 text = "⚠️",
                                 fontSize = 20.sp
@@ -1474,7 +1465,7 @@ fun FireHydrantListScreen(
                 }
             }
 
-            // Show active filter indicator if not "All" (only for regular list)
+            // Show active filter indicator if not "All"
             if (selectedFilter != "All" && !showInvalidCoordinatesOnly) {
                 Surface(
                     modifier = Modifier
@@ -1915,7 +1906,7 @@ fun EditFireHydrantScreen(
     val scope = rememberCoroutineScope()
 
     // Form state - initialized with existing hydrant data
-    var hydrantName by rememberSaveable { mutableStateOf(hydrant.hydrantName) }
+    // REMOVED: hydrantName state - it's now read-only and uses hydrant.hydrantName directly
     var exactLocation by rememberSaveable { mutableStateOf(hydrant.exactLocation) }
     var latitude by rememberSaveable { mutableStateOf(hydrant.latitude) }
     var longitude by rememberSaveable { mutableStateOf(hydrant.longitude) }
@@ -1929,9 +1920,8 @@ fun EditFireHydrantScreen(
     var showUnsavedChangesDialog by rememberSaveable { mutableStateOf(false) }
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
 
-    // Check if there are unsaved changes
-    val hasChanges = hydrantName != hydrant.hydrantName ||
-            exactLocation != hydrant.exactLocation ||
+    // Check if there are unsaved changes (hydrantName removed - not editable)
+    val hasChanges = exactLocation != hydrant.exactLocation ||
             latitude != hydrant.latitude ||
             longitude != hydrant.longitude ||
             typeColor != hydrant.typeColor ||
@@ -1974,11 +1964,11 @@ fun EditFireHydrantScreen(
                 TextButton(
                     onClick = {
                         showUnsavedChangesDialog = false
-                        // Save changes
-                        if (hydrantName.isNotBlank() && exactLocation.isNotBlank()) {
+                        // Save changes (hydrantName stays the same)
+                        if (exactLocation.isNotBlank()) {
                             hydrantViewModel.updateFireHydrant(
                                 hydrant.copy(
-                                    hydrantName = hydrantName,
+                                    // hydrantName is NOT changed - stays as original
                                     exactLocation = exactLocation,
                                     latitude = latitude,
                                     longitude = longitude,
@@ -2023,7 +2013,6 @@ fun EditFireHydrantScreen(
                 TextButton(
                     onClick = {
                         showDeleteConfirmDialog = false
-                        // Use the new deleteHydrantAndRenumber function
                         hydrantViewModel.deleteHydrantAndRenumber(hydrant.municipality, hydrant.id)
                     },
                     colors = ButtonDefaults.textButtonColors(
@@ -2087,7 +2076,7 @@ fun EditFireHydrantScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Hydrant Name
+            // Hydrant Name - READ ONLY (not editable)
             Column {
                 Text(
                     "Hydrant Name",
@@ -2096,16 +2085,24 @@ fun EditFireHydrantScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = hydrantName,
-                    onValueChange = {
-                        hydrantName = it
-                        validationError = ""
-                    },
-                    placeholder = { Text("Enter hydrant name") },
+                    value = hydrant.hydrantName, // Display original name
+                    onValueChange = { }, // No action - read only
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    enabled = !hydrantUiState.isLoading,
-                    shape = RoundedCornerShape(8.dp)
+                    enabled = false, // Disabled - cannot edit
+                    readOnly = true,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        disabledTextColor = Color(0xFF666666),
+                        disabledBorderColor = Color(0xFFBDBDBD),
+                        disabledContainerColor = Color(0xFFF5F5F5)
+                    )
+                )
+                Text(
+                    text = "Auto-generated name cannot be edited",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
 
@@ -2287,12 +2284,11 @@ fun EditFireHydrantScreen(
                 Button(
                     onClick = {
                         when {
-                            hydrantName.isBlank() -> validationError = "Hydrant name is required"
                             exactLocation.isBlank() -> validationError = "Exact location is required"
                             else -> {
                                 hydrantViewModel.updateFireHydrant(
                                     hydrant.copy(
-                                        hydrantName = hydrantName,
+                                        // hydrantName stays the same (not editable)
                                         exactLocation = exactLocation,
                                         latitude = latitude,
                                         longitude = longitude,
@@ -2342,7 +2338,7 @@ fun AddFireHydrantScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    var hydrantName by rememberSaveable { mutableStateOf("") }
+    // REMOVED: hydrantName - it will be auto-generated
     var exactLocation by rememberSaveable { mutableStateOf("") }
     var latitude by rememberSaveable { mutableStateOf("") }
     var longitude by rememberSaveable { mutableStateOf("") }
@@ -2403,26 +2399,7 @@ fun AddFireHydrantScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column {
-                Text(
-                    "Hydrant Name",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = hydrantName,
-                    onValueChange = {
-                        hydrantName = it
-                        validationError = ""
-                    },
-                    placeholder = { Text("Enter hydrant name") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    enabled = !hydrantUiState.isLoading,
-                    shape = RoundedCornerShape(8.dp)
-                )
-            }
+            // Hydrant Name field REMOVED - will be auto-generated as "Hydrant Id_X"
 
             Column {
                 Text(
@@ -2599,14 +2576,14 @@ fun AddFireHydrantScreen(
                 Button(
                     onClick = {
                         when {
-                            hydrantName.isBlank() -> validationError = "Hydrant name is required"
                             exactLocation.isBlank() -> validationError = "Exact location is required"
                             latitude.isBlank() -> validationError = "Latitude is required"
                             longitude.isBlank() -> validationError = "Longitude is required"
                             typeColor.isBlank() -> validationError = "Type/Color is required"
                             else -> {
+                                // Hydrant name will be auto-generated in repository
                                 hydrantViewModel.addFireHydrant(
-                                    hydrantName = hydrantName,
+                                    hydrantName = "", // Will be auto-generated
                                     exactLocation = exactLocation,
                                     latitude = latitude,
                                     longitude = longitude,
@@ -4550,7 +4527,7 @@ fun FavoritesScreen(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     placeholder = {
-                        Text("Search...", color = Color.Gray)
+                        Text("Search", color = Color.Gray)
                     },
                     leadingIcon = {
                         Icon(
