@@ -14,6 +14,7 @@ import kotlinx.coroutines.tasks.await
 
 data class HydrantUiState(
     val hydrants: List<FireHydrant> = emptyList(),
+    val allHydrants: List<FireHydrant> = emptyList(),  // NEW: For all hydrants across municipalities
     val inServiceCount: Int = 0,
     val outOfServiceCount: Int = 0,
     val isLoading: Boolean = false,
@@ -49,6 +50,63 @@ class FireHydrantViewModel : ViewModel() {
                 _uiState.value = _uiState.value.copy(
                     inServiceCount = inService,
                     outOfServiceCount = outOfService
+                )
+            }
+        }
+    }
+
+    /**
+     * NEW: Load all hydrants from all municipalities for finding nearest hydrant
+     */
+    fun loadAllHydrants() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+
+            try {
+                val municipalities = listOf(
+                    "Alaminos", "Bay", "Biñan", "Cabuyao", "Calamba", "Calauan",
+                    "Cavinti", "Famy", "Kalayaan", "Liliw", "Los Baños", "Luisiana",
+                    "Lumban", "Mabitac", "Magdalena", "Majayjay", "Nagcarlan", "Paete",
+                    "Pagsanjan", "Pakil", "Pangil", "Rizal", "San Pablo", "San Pedro",
+                    "Santa Cruz", "Santa Maria", "Santa Rosa", "Siniloan", "Victoria"
+                )
+
+                val allHydrants = mutableListOf<FireHydrant>()
+
+                for (municipality in municipalities) {
+                    try {
+                        val hydrantsRef = database.getReference("fire_hydrants").child(municipality)
+                        val snapshot = hydrantsRef.get().await()
+
+                        if (snapshot.exists()) {
+                            for (childSnapshot in snapshot.children) {
+                                val hydrant = childSnapshot.getValue(FireHydrant::class.java)
+                                if (hydrant != null) {
+                                    // Ensure the ID is set from the key if not present
+                                    val hydrantWithId = if (hydrant.id.isEmpty()) {
+                                        hydrant.copy(id = childSnapshot.key ?: "")
+                                    } else {
+                                        hydrant
+                                    }
+                                    allHydrants.add(hydrantWithId)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Continue with next municipality if one fails
+                        e.printStackTrace()
+                    }
+                }
+
+                _uiState.value = _uiState.value.copy(
+                    allHydrants = allHydrants,
+                    isLoading = false,
+                    error = null
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = e.message ?: "Failed to load all hydrants"
                 )
             }
         }

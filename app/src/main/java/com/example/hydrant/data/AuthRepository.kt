@@ -37,6 +37,15 @@ class AuthRepository {
         }
     }
 
+    suspend fun fetchSignInMethodsForEmail(email: String): List<String> {
+        return try {
+            val result = auth.fetchSignInMethodsForEmail(email).await()
+            result.signInMethods ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     fun signOut() {
         auth.signOut()
     }

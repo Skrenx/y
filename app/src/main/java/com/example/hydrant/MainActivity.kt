@@ -69,6 +69,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.MyLocation
 
 // Weather Data Classes
 data class WeatherResponse(
@@ -277,6 +285,7 @@ fun HYDRANTApp() {
     val auth = FirebaseAuth.getInstance()
     var isLoggedIn by rememberSaveable { mutableStateOf(auth.currentUser != null) }
     var showSignUp by rememberSaveable { mutableStateOf(false) }
+    var signUpSuccessMessage by rememberSaveable { mutableStateOf<String?>(null) }  // NEW: Added this state
 
     val userName = auth.currentUser?.displayName ?: "Full Name"
 
@@ -289,21 +298,35 @@ fun HYDRANTApp() {
         )
         showSignUp -> SignUpScreen(
             onSignUpSuccess = {
-                isLoggedIn = true
+                // This callback is no longer used since we redirect to login
             },
-            onBackToLogin = { showSignUp = false }
+            onBackToLogin = {
+                showSignUp = false
+            },
+            onSignUpComplete = { message ->  // NEW: Added this callback
+                // New callback for successful sign-up that redirects to login
+                signUpSuccessMessage = message
+                showSignUp = false
+            }
         )
         else -> LoginScreen(
             onLoginSuccess = {
                 isLoggedIn = true
+                signUpSuccessMessage = null  // NEW: Clear the message after login
             },
-            onNavigateToSignUp = { showSignUp = true }
+            onNavigateToSignUp = { showSignUp = true },
+            successMessage = signUpSuccessMessage  // NEW: Pass the success message
         )
     }
 }
 
+
 @Composable
-fun LoginScreen(onLoginSuccess: () -> Unit, onNavigateToSignUp: () -> Unit) {
+fun LoginScreen(
+    onLoginSuccess: () -> Unit,
+    onNavigateToSignUp: () -> Unit,
+    successMessage: String? = null
+) {
     val viewModel: AuthViewModel = viewModel()
     val uiState by viewModel.uiState.collectAsState()
 
@@ -320,10 +343,10 @@ fun LoginScreen(onLoginSuccess: () -> Unit, onNavigateToSignUp: () -> Unit) {
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(uiState.error) {
-        uiState.error?.let {
+
+    LaunchedEffect(successMessage) {
+        successMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearError()
         }
     }
 
@@ -465,19 +488,30 @@ fun LoginScreen(onLoginSuccess: () -> Unit, onNavigateToSignUp: () -> Unit) {
 
                 OutlinedTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        if (uiState.error != null) {
+                            viewModel.clearError()
+                        }
+                    },
                     label = { Text("Email") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    enabled = !uiState.isLoading
+                    enabled = !uiState.isLoading,
+                    isError = uiState.error != null
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        if (uiState.error != null) {
+                            viewModel.clearError()
+                        }
+                    },
                     label = { Text("Password") },
                     singleLine = true,
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -491,8 +525,38 @@ fun LoginScreen(onLoginSuccess: () -> Unit, onNavigateToSignUp: () -> Unit) {
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !uiState.isLoading
+                    enabled = !uiState.isLoading,
+                    isError = uiState.error != null
                 )
+
+                // Inline Error Message Display
+                if (uiState.error != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFEBEE),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = "Login Error",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD32F2F)
+                            )
+                            Text(
+                                text = uiState.error!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFD32F2F)
+                            )
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -548,11 +612,17 @@ fun LoginScreen(onLoginSuccess: () -> Unit, onNavigateToSignUp: () -> Unit) {
 }
 
 @Composable
-fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
+fun SignUpScreen(
+    onSignUpSuccess: () -> Unit,
+    onBackToLogin: () -> Unit,
+    onSignUpComplete: (String) -> Unit = {}
+) {
     val viewModel: AuthViewModel = viewModel()
     val uiState by viewModel.uiState.collectAsState()
 
-    var name by rememberSaveable { mutableStateOf("") }
+    var firstName by rememberSaveable { mutableStateOf("") }
+    var middleName by rememberSaveable { mutableStateOf("") }
+    var lastName by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var confirmPassword by rememberSaveable { mutableStateOf("") }
@@ -560,19 +630,47 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
     var confirmPasswordVisible by rememberSaveable { mutableStateOf(false) }
     var localError by rememberSaveable { mutableStateOf("") }
 
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Helper function to validate name fields
+    fun isValidName(name: String): Boolean {
+        // Name must contain at least 2 letters and only letters, spaces, hyphens, or apostrophes
+        val trimmedName = name.trim()
+        if (trimmedName.length < 2) return false
+        // Check if it contains at least 2 letters
+        val letterCount = trimmedName.count { it.isLetter() }
+        if (letterCount < 2) return false
+        // Check if all characters are valid (letters, spaces, hyphens, apostrophes)
+        return trimmedName.all { it.isLetter() || it == ' ' || it == '-' || it == '\'' }
+    }
+
+    // Helper function to validate email format
+    fun isValidEmail(email: String): Boolean {
+        val emailPattern = android.util.Patterns.EMAIL_ADDRESS
+        return emailPattern.matcher(email.trim()).matches()
+    }
+
     LaunchedEffect(uiState.isAuthenticated) {
         if (uiState.isAuthenticated) {
             val user = FirebaseAuth.getInstance().currentUser
+            // Combine names: First Middle Last (middle name is optional)
+            val fullName = if (middleName.isNotBlank()) {
+                "${firstName.trim()} ${middleName.trim()} ${lastName.trim()}"
+            } else {
+                "${firstName.trim()} ${lastName.trim()}"
+            }
             val profileUpdates = userProfileChangeRequest {
-                displayName = name
+                displayName = fullName.trim()
             }
             user?.updateProfile(profileUpdates)?.addOnCompleteListener {
-                onSignUpSuccess()
+                // Sign out after successful registration so user goes back to login
+                FirebaseAuth.getInstance().signOut()
+                viewModel.resetAuthState()
+                onSignUpComplete("Account created successfully! Please login.")
             }
         }
     }
 
-    val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
             snackbarHostState.showSnackbar(it)
@@ -613,14 +711,15 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
 
                 item { Spacer(modifier = Modifier.height(32.dp)) }
 
+                // First Name
                 item {
                     OutlinedTextField(
-                        value = name,
+                        value = firstName,
                         onValueChange = {
-                            name = it
+                            firstName = it
                             localError = ""
                         },
-                        label = { Text("Full Name") },
+                        label = { Text("First Name") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !uiState.isLoading,
@@ -630,13 +729,67 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
                         ),
                         keyboardOptions = KeyboardOptions(
                             imeAction = ImeAction.Next,
-                            autoCorrect = false
+                            autoCorrect = false,
+                            keyboardType = KeyboardType.Text
                         )
                     )
                 }
 
                 item { Spacer(modifier = Modifier.height(16.dp)) }
 
+                // Middle Name (Optional)
+                item {
+                    OutlinedTextField(
+                        value = middleName,
+                        onValueChange = {
+                            middleName = it
+                            localError = ""
+                        },
+                        label = { Text("Middle Name (Optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !uiState.isLoading,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFFF6B35),
+                            focusedLabelColor = Color(0xFFFF6B35)
+                        ),
+                        keyboardOptions = KeyboardOptions(
+                            imeAction = ImeAction.Next,
+                            autoCorrect = false,
+                            keyboardType = KeyboardType.Text
+                        )
+                    )
+                }
+
+                item { Spacer(modifier = Modifier.height(16.dp)) }
+
+                // Last Name
+                item {
+                    OutlinedTextField(
+                        value = lastName,
+                        onValueChange = {
+                            lastName = it
+                            localError = ""
+                        },
+                        label = { Text("Last Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !uiState.isLoading,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFFF6B35),
+                            focusedLabelColor = Color(0xFFFF6B35)
+                        ),
+                        keyboardOptions = KeyboardOptions(
+                            imeAction = ImeAction.Next,
+                            autoCorrect = false,
+                            keyboardType = KeyboardType.Text
+                        )
+                    )
+                }
+
+                item { Spacer(modifier = Modifier.height(16.dp)) }
+
+                // Email
                 item {
                     OutlinedTextField(
                         value = email,
@@ -648,12 +801,17 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                        enabled = !uiState.isLoading
+                        enabled = !uiState.isLoading,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFFF6B35),
+                            focusedLabelColor = Color(0xFFFF6B35)
+                        )
                     )
                 }
 
                 item { Spacer(modifier = Modifier.height(16.dp)) }
 
+                // Password
                 item {
                     OutlinedTextField(
                         value = password,
@@ -674,7 +832,11 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isLoading
+                        enabled = !uiState.isLoading,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFFF6B35),
+                            focusedLabelColor = Color(0xFFFF6B35)
+                        )
                     )
                 }
 
@@ -691,6 +853,7 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
 
                 item { Spacer(modifier = Modifier.height(16.dp)) }
 
+                // Confirm Password
                 item {
                     OutlinedTextField(
                         value = confirmPassword,
@@ -711,7 +874,11 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isLoading
+                        enabled = !uiState.isLoading,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFFF6B35),
+                            focusedLabelColor = Color(0xFFFF6B35)
+                        )
                     )
                 }
 
@@ -732,8 +899,32 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
                     Button(
                         onClick = {
                             when {
-                                name.isBlank() || email.isBlank() || password.isBlank() || confirmPassword.isBlank() -> {
-                                    localError = "Please fill in all fields"
+                                firstName.isBlank() -> {
+                                    localError = "First name is required"
+                                }
+                                !isValidName(firstName) -> {
+                                    localError = "First name must contain at least 2 letters and only letters"
+                                }
+                                lastName.isBlank() -> {
+                                    localError = "Last name is required"
+                                }
+                                !isValidName(lastName) -> {
+                                    localError = "Last name must contain at least 2 letters and only letters"
+                                }
+                                middleName.isNotBlank() && !isValidName(middleName) -> {
+                                    localError = "Middle name must contain at least 2 letters and only letters"
+                                }
+                                email.isBlank() -> {
+                                    localError = "Email is required"
+                                }
+                                !isValidEmail(email) -> {
+                                    localError = "Please enter a valid email address"
+                                }
+                                password.isBlank() -> {
+                                    localError = "Password is required"
+                                }
+                                confirmPassword.isBlank() -> {
+                                    localError = "Please confirm your password"
                                 }
                                 password != confirmPassword -> {
                                     localError = "Passwords do not match"
@@ -744,7 +935,7 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit, onBackToLogin: () -> Unit) {
                                         localError = passwordValidationError
                                     } else {
                                         localError = ""
-                                        viewModel.signUp(email, password)
+                                        viewModel.signUp(email.trim(), password)
                                     }
                                 }
                             }
@@ -3411,6 +3602,7 @@ fun ViewHydrantLocationScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MapScreen(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -3420,8 +3612,135 @@ fun MapScreen(modifier: Modifier = Modifier) {
     }
 
     var isMyLocationEnabled by remember { mutableStateOf(false) }
-    var showMenuDialog by remember { mutableStateOf(false) }
+    var isDrawerOpen by remember { mutableStateOf(false) }
+    var isSearchingNearestHydrant by remember { mutableStateOf(false) }
+    var nearestHydrant by remember { mutableStateOf<FireHydrant?>(null) }
+    var nearestHydrantDistance by remember { mutableStateOf<Double?>(null) }
     val scope = rememberCoroutineScope()
+
+    // Get hydrant ViewModel to load all hydrants
+    val hydrantViewModel: FireHydrantViewModel = viewModel()
+    val hydrantUiState by hydrantViewModel.uiState.collectAsState()
+
+    // Load all hydrants when screen opens
+    LaunchedEffect(Unit) {
+        hydrantViewModel.loadAllHydrants()
+    }
+
+    // Filter hydrants with valid coordinates
+    val hydrantsWithValidCoords = hydrantUiState.allHydrants.filter { hydrant ->
+        val lat = hydrant.latitude.toDoubleOrNull()
+        val lng = hydrant.longitude.toDoubleOrNull()
+        lat != null && lng != null &&
+                lat in -90.0..90.0 &&
+                lng in -180.0..180.0 &&
+                !(lat == 0.0 && lng == 0.0)
+    }
+
+    // Create marker icons
+    var greenMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
+    var redMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
+    var blueMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
+    var markersReady by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
+        try {
+            val centerX = 24f
+            val topRadius = 14f
+            val bottomY = 44f
+
+            // Create green marker (In Service)
+            val greenBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+            val greenCanvas = android.graphics.Canvas(greenBitmap)
+            val greenPaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = android.graphics.Color.parseColor("#4CAF50")
+                style = android.graphics.Paint.Style.FILL
+            }
+            greenCanvas.drawCircle(centerX, topRadius + 4f, topRadius, greenPaint)
+            val greenTriangle = android.graphics.Path()
+            greenTriangle.moveTo(centerX, bottomY)
+            greenTriangle.lineTo(centerX - 12f, topRadius + 12f)
+            greenTriangle.lineTo(centerX + 12f, topRadius + 12f)
+            greenTriangle.close()
+            greenCanvas.drawPath(greenTriangle, greenPaint)
+            greenPaint.color = android.graphics.Color.WHITE
+            greenCanvas.drawCircle(centerX, topRadius + 4f, 6f, greenPaint)
+            greenMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(greenBitmap)
+
+            // Create red marker (Out of Service)
+            val redBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+            val redCanvas = android.graphics.Canvas(redBitmap)
+            val redPaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = android.graphics.Color.parseColor("#EF5350")
+                style = android.graphics.Paint.Style.FILL
+            }
+            redCanvas.drawCircle(centerX, topRadius + 4f, topRadius, redPaint)
+            val redTriangle = android.graphics.Path()
+            redTriangle.moveTo(centerX, bottomY)
+            redTriangle.lineTo(centerX - 12f, topRadius + 12f)
+            redTriangle.lineTo(centerX + 12f, topRadius + 12f)
+            redTriangle.close()
+            redCanvas.drawPath(redTriangle, redPaint)
+            redPaint.color = android.graphics.Color.WHITE
+            redCanvas.drawCircle(centerX, topRadius + 4f, 6f, redPaint)
+            redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(redBitmap)
+
+            // Create blue marker (Nearest Hydrant)
+            val blueBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+            val blueCanvas = android.graphics.Canvas(blueBitmap)
+            val bluePaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = android.graphics.Color.parseColor("#2196F3")
+                style = android.graphics.Paint.Style.FILL
+            }
+            blueCanvas.drawCircle(centerX, topRadius + 4f, topRadius, bluePaint)
+            val blueTriangle = android.graphics.Path()
+            blueTriangle.moveTo(centerX, bottomY)
+            blueTriangle.lineTo(centerX - 12f, topRadius + 12f)
+            blueTriangle.lineTo(centerX + 12f, topRadius + 12f)
+            blueTriangle.close()
+            blueCanvas.drawPath(blueTriangle, bluePaint)
+            bluePaint.color = android.graphics.Color.WHITE
+            blueCanvas.drawCircle(centerX, topRadius + 4f, 6f, bluePaint)
+            blueMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(blueBitmap)
+
+            markersReady = true
+        } catch (e: Exception) {
+            greenMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
+                com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_GREEN
+            )
+            redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
+                com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_RED
+            )
+            blueMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
+                com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_BLUE
+            )
+            markersReady = true
+        }
+    }
+
+    // Animation for drawer slide
+    val drawerOffsetX by animateDpAsState(
+        targetValue = if (isDrawerOpen) 0.dp else (-280).dp,
+        animationSpec = tween(
+            durationMillis = 300,
+            easing = FastOutSlowInEasing
+        ),
+        label = "drawerOffset"
+    )
+
+    // Animation for scrim alpha
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (isDrawerOpen) 0.5f else 0f,
+        animationSpec = tween(
+            durationMillis = 300,
+            easing = FastOutSlowInEasing
+        ),
+        label = "scrimAlpha"
+    )
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -3451,67 +3770,42 @@ fun MapScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // Menu Dialog
-    if (showMenuDialog) {
-        AlertDialog(
-            onDismissRequest = { showMenuDialog = false },
-            title = { Text("Map Options") },
-            text = {
-                Column {
-                    TextButton(
-                        onClick = {
-                            // Reset to Laguna view
-                            scope.launch {
-                                cameraPositionState.animate(
-                                    CameraUpdateFactory.newLatLngZoom(lagunaLake, 10f)
-                                )
-                            }
-                            showMenuDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Reset to Laguna View", color = Color(0xFF212121))
-                    }
-                    TextButton(
-                        onClick = {
-                            // Go to current location
-                            if (checkLocationPermission(context)) {
-                                isMyLocationEnabled = true
-                                getCurrentLocation(context) { location ->
-                                    scope.launch {
-                                        cameraPositionState.animate(
-                                            CameraUpdateFactory.newLatLngZoom(
-                                                LatLng(location.latitude, location.longitude),
-                                                15f
-                                            )
-                                        )
-                                    }
-                                }
-                            } else {
-                                locationPermissionLauncher.launch(
-                                    arrayOf(
-                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
-                                        android.Manifest.permission.ACCESS_COARSE_LOCATION
-                                    )
-                                )
-                            }
-                            showMenuDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Go to My Location", color = Color(0xFF212121))
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showMenuDialog = false }) {
-                    Text("Close")
-                }
+    // Function to calculate distance between two points (Haversine formula)
+    fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371 // Earth's radius in kilometers
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        return r * c // Distance in kilometers
+    }
+
+    // Function to find nearest hydrant
+    fun findNearestHydrant(userLat: Double, userLng: Double, hydrants: List<FireHydrant>): Pair<FireHydrant?, Double?> {
+        var nearest: FireHydrant? = null
+        var minDistance = Double.MAX_VALUE
+
+        for (hydrant in hydrants) {
+            val lat = hydrant.latitude.toDoubleOrNull() ?: continue
+            val lng = hydrant.longitude.toDoubleOrNull() ?: continue
+
+            // Skip invalid coordinates
+            if (lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat == 0.0 && lng == 0.0)) continue
+
+            val distance = calculateDistance(userLat, userLng, lat, lng)
+            if (distance < minDistance) {
+                minDistance = distance
+                nearest = hydrant
             }
-        )
+        }
+
+        return if (nearest != null) Pair(nearest, minDistance) else Pair(null, null)
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        // Map
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
@@ -3522,11 +3816,192 @@ fun MapScreen(modifier: Modifier = Modifier) {
                 myLocationButtonEnabled = false,
                 zoomControlsEnabled = false
             )
-        )
+        ) {
+            // Show all hydrants on the map
+            if (markersReady && greenMarkerIcon != null && redMarkerIcon != null) {
+                hydrantsWithValidCoords.forEach { hydrant ->
+                    val lat = hydrant.latitude.toDoubleOrNull() ?: return@forEach
+                    val lng = hydrant.longitude.toDoubleOrNull() ?: return@forEach
+
+                    // Check if this is the nearest hydrant
+                    val isNearest = nearestHydrant?.let {
+                        it.id == hydrant.id && it.municipality == hydrant.municipality
+                    } ?: false
+
+                    val markerIcon = when {
+                        isNearest -> blueMarkerIcon!!
+                        hydrant.serviceStatus == "In Service" -> greenMarkerIcon!!
+                        else -> redMarkerIcon!!
+                    }
+
+                    com.google.maps.android.compose.Marker(
+                        state = com.google.maps.android.compose.MarkerState(
+                            position = LatLng(lat, lng)
+                        ),
+                        title = "${hydrant.municipality} - ${hydrant.hydrantName}",
+                        snippet = "${hydrant.exactLocation} | ${hydrant.serviceStatus}",
+                        icon = markerIcon
+                    )
+                }
+            }
+        }
+
+        // Hydrant count info card - Top Left (below menu button)
+        Card(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 12.dp, top = 64.dp)
+                .statusBarsPadding(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp)
+            ) {
+                Text(
+                    text = "Hydrants: ${hydrantsWithValidCoords.size}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    modifier = Modifier.padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = Color(0xFF4CAF50),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = " ${hydrantsWithValidCoords.count { it.serviceStatus == "In Service" }}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = Color(0xFFEF5350),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = " ${hydrantsWithValidCoords.count { it.serviceStatus != "In Service" }}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
+        // Nearest Hydrant Info Card (shown when hydrant is found)
+        nearestHydrant?.let { hydrant ->
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+                    .fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = Color(0xFF2196F3),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Nearest Hydrant",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2196F3)
+                            )
+                        }
+                        IconButton(
+                            onClick = { nearestHydrant = null },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = Color.Gray,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = hydrant.hydrantName,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = hydrant.exactLocation,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray
+                    )
+                    Text(
+                        text = "Municipality: ${hydrant.municipality}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        nearestHydrantDistance?.let { distance ->
+                            Surface(
+                                color = Color(0xFFE3F2FD),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Text(
+                                    text = if (distance < 1) {
+                                        "📍 %.0f meters away".format(distance * 1000)
+                                    } else {
+                                        "📍 %.2f km away".format(distance)
+                                    },
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF1976D2),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                        Surface(
+                            color = if (hydrant.serviceStatus == "In Service")
+                                Color(0xFF81C784) else Color(0xFFEF5350),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text(
+                                text = hydrant.serviceStatus,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         // Hamburger Menu Button - Top Left
         FloatingActionButton(
-            onClick = { showMenuDialog = true },
+            onClick = { isDrawerOpen = true },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(start = 12.dp, top = 12.dp)
@@ -3552,7 +4027,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = 16.dp),
+                .padding(end = 12.dp, bottom = if (nearestHydrant != null) 180.dp else 16.dp),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -3643,6 +4118,354 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     text = "−",
                     style = MaterialTheme.typography.titleLarge,
                     color = Color(0xFF5F6368)
+                )
+            }
+        }
+
+        // Loading indicator
+        if (hydrantUiState.isLoading || isSearchingNearestHydrant) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        CircularProgressIndicator(color = Color(0xFFFF6B35))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = if (isSearchingNearestHydrant) "Finding nearest hydrant..." else "Loading hydrants...",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+
+        // Dark scrim with animation - TAP TO CLOSE
+        if (scrimAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = scrimAlpha))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { isDrawerOpen = false }
+            )
+        }
+
+        // Drawer Content with slide animation
+        Surface(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(280.dp)
+                .offset(x = drawerOffsetX)
+                .align(Alignment.CenterStart),
+            color = Color.White,
+            shadowElevation = if (isDrawerOpen) 16.dp else 0.dp
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                // Drawer Header
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFFF6B35))
+                        .statusBarsPadding()
+                        .padding(24.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = buildAnnotatedString {
+                                withStyle(style = SpanStyle(color = Color.White)) {
+                                    append("Fire")
+                                }
+                                withStyle(style = SpanStyle(color = Color(0xFFFFE0B2))) {
+                                    append("Grid")
+                                }
+                            },
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Map Options",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Find Nearest Hydrant
+                Surface(
+                    onClick = {
+                        isDrawerOpen = false
+                        if (checkLocationPermission(context)) {
+                            isSearchingNearestHydrant = true
+                            isMyLocationEnabled = true
+
+                            getCurrentLocation(context) { location ->
+                                scope.launch {
+                                    // Use already loaded hydrants
+                                    val allHydrants = hydrantUiState.allHydrants
+                                    if (allHydrants.isNotEmpty()) {
+                                        val (nearest, distance) = findNearestHydrant(
+                                            location.latitude,
+                                            location.longitude,
+                                            allHydrants
+                                        )
+
+                                        if (nearest != null) {
+                                            nearestHydrant = nearest
+                                            nearestHydrantDistance = distance
+
+                                            val lat = nearest.latitude.toDoubleOrNull()
+                                            val lng = nearest.longitude.toDoubleOrNull()
+                                            if (lat != null && lng != null) {
+                                                cameraPositionState.animate(
+                                                    CameraUpdateFactory.newLatLngZoom(
+                                                        LatLng(lat, lng),
+                                                        16f
+                                                    )
+                                                )
+                                            }
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "No hydrants found nearby",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Loading hydrants, please try again",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                    isSearchingNearestHydrant = false
+                                }
+                            }
+                        } else {
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            tint = Color(0xFF2196F3),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Find Nearest Hydrant",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp, horizontal = 16.dp),
+                    color = Color(0xFFE0E0E0)
+                )
+
+                // Reset to Laguna View
+                Surface(
+                    onClick = {
+                        isDrawerOpen = false
+                        nearestHydrant = null
+                        scope.launch {
+                            cameraPositionState.animate(
+                                CameraUpdateFactory.newLatLngZoom(lagunaLake, 10f)
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = Color(0xFFFF6B35),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Reset to Laguna View",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+
+// Go to My Location
+                Surface(
+                    onClick = {
+                        isDrawerOpen = false
+                        nearestHydrant = null
+                        if (checkLocationPermission(context)) {
+                            isMyLocationEnabled = true
+                            getCurrentLocation(context) { location ->
+                                scope.launch {
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.newLatLngZoom(
+                                            LatLng(location.latitude, location.longitude),
+                                            15f
+                                        )
+                                    )
+                                }
+                            }
+                        } else {
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = Color(0xFF5F6368),  // Normal gray color
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Go to My Location",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp),
+                    color = Color(0xFFE0E0E0)
+                )
+
+                // Map Legend
+                Text(
+                    text = "Map Legend",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                )
+
+                // Legend Item - In Service
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = Color(0xFF4CAF50),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = "In Service Hydrant",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
+                // Legend Item - Out of Service
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = Color(0xFFEF5350),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = "Out of Service Hydrant",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
+                // Legend Item - Nearest Hydrant
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = Color(0xFF2196F3),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = "Nearest Hydrant",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Footer
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = Color(0xFFE0E0E0)
+                )
+
+                Text(
+                    text = "FireGrid v1.0.0",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
             }
         }
