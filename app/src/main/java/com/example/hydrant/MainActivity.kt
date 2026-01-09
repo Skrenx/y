@@ -77,6 +77,23 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Directions
+import androidx.activity.compose.BackHandler
+import com.google.firebase.auth.EmailAuthProvider
+import android.content.Intent
+import com.google.maps.android.compose.Polyline
+import org.json.JSONObject
+import java.net.URL
+import java.net.HttpURLConnection
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 
 // Weather Data Classes
 data class WeatherResponse(
@@ -119,6 +136,13 @@ data class DailyWeather(
     val humidity: Int,
     val windSpeed: Double,
     val condition: String
+)
+
+// Directions Data Class
+data class DirectionsResult(
+    val polylinePoints: List<LatLng>,
+    val distance: String,
+    val duration: String
 )
 
 // Weather API Functions
@@ -256,6 +280,105 @@ fun parseForecastJson(json: String): DailyWeather? {
     }
 }
 
+// Directions API Function
+suspend fun fetchDirections(origin: LatLng, destination: LatLng): DirectionsResult? {
+    val apiKey = "AIzaSyCdwrCeDEi3tPzjg6-2lGNueLJqHJFv1ZQ"
+    val url = "https://maps.googleapis.com/maps/api/directions/json?" +
+            "origin=${origin.latitude},${origin.longitude}" +
+            "&destination=${destination.latitude},${destination.longitude}" +
+            "&mode=driving" +
+            "&key=$apiKey"
+
+    return withContext(Dispatchers.IO) {
+        try {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val responseCode = connection.responseCode
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                val response = connection.inputStream.bufferedReader().use { it.readText() }
+                parseDirectionsJson(response)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+}
+
+fun parseDirectionsJson(json: String): DirectionsResult? {
+    return try {
+        val jsonObject = JSONObject(json)
+        val status = jsonObject.getString("status")
+
+        if (status != "OK") {
+            return null
+        }
+
+        val routes = jsonObject.getJSONArray("routes")
+        if (routes.length() == 0) return null
+
+        val route = routes.getJSONObject(0)
+        val overviewPolyline = route.getJSONObject("overview_polyline")
+        val encodedPoints = overviewPolyline.getString("points")
+
+        val legs = route.getJSONArray("legs")
+        val leg = legs.getJSONObject(0)
+        val distance = leg.getJSONObject("distance").getString("text")
+        val duration = leg.getJSONObject("duration").getString("text")
+
+        val decodedPath = decodePolyline(encodedPoints)
+
+        DirectionsResult(
+            polylinePoints = decodedPath,
+            distance = distance,
+            duration = duration
+        )
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
+
+fun decodePolyline(encoded: String): List<LatLng> {
+    val poly = mutableListOf<LatLng>()
+    var index = 0
+    val len = encoded.length
+    var lat = 0
+    var lng = 0
+
+    while (index < len) {
+        var b: Int
+        var shift = 0
+        var result = 0
+        do {
+            b = encoded[index++].code - 63
+            result = result or (b and 0x1f shl shift)
+            shift += 5
+        } while (b >= 0x20)
+        val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+        lat += dlat
+
+        shift = 0
+        result = 0
+        do {
+            b = encoded[index++].code - 63
+            result = result or (b and 0x1f shl shift)
+            shift += 5
+        } while (b >= 0x20)
+        val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+        lng += dlng
+
+        val p = LatLng(lat.toDouble() / 1E5, lng.toDouble() / 1E5)
+        poly.add(p)
+    }
+    return poly
+}
+
 fun validatePassword(password: String): String? {
     return when {
         password.length < 12 -> "Password must be at least 12 characters"
@@ -268,7 +391,12 @@ fun validatePassword(password: String): String? {
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
+
+        // Start the logout service
+        startService(Intent(this, LogoutService::class.java))
+
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
@@ -463,147 +591,196 @@ fun LoginScreen(
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) }
         ) { padding ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(24.dp)
                     .padding(padding)
-                    .systemBarsPadding(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(style = SpanStyle(color = Color(0xFFFF6B35))) {
-                            append("Fire")
-                        }
-                        withStyle(style = SpanStyle(color = Color(0xFFFF4500))) {
-                            append("Grid")
-                        }
-                    },
-                    style = MaterialTheme.typography.headlineLarge
-                )
-
-                Spacer(modifier = Modifier.height(48.dp))
-
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = {
-                        email = it
-                        if (uiState.error != null) {
-                            viewModel.clearError()
-                        }
-                    },
-                    label = { Text("Email") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    enabled = !uiState.isLoading,
-                    isError = uiState.error != null
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = {
-                        password = it
-                        if (uiState.error != null) {
-                            viewModel.clearError()
-                        }
-                    },
-                    label = { Text("Password") },
-                    singleLine = true,
-                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    trailingIcon = {
-                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                            Text(
-                                text = if (passwordVisible) "👁" else "👁‍🗨️",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !uiState.isLoading,
-                    isError = uiState.error != null
-                )
-
-                // Inline Error Message Display
-                if (uiState.error != null) {
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = Color(0xFFFFEBEE),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = "Login Error",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFD32F2F)
-                            )
-                            Text(
-                                text = uiState.error!!,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFD32F2F)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = {
-                        showForgotPasswordDialog = true
-                    }) {
-                        Text(
-                            "Forgot Password?",
-                            color = Color.Black
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Button(
-                    onClick = {
-                        viewModel.signIn(email, password)
-                    },
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp),
-                    enabled = !uiState.isLoading && email.isNotBlank() && password.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF6B35)
-                    )
+                        .fillMaxSize()
+                        .padding(24.dp)
+                        .systemBarsPadding()
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    if (uiState.isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = MaterialTheme.colorScheme.onPrimary
+                    // Top Logo Row: app_logo + "FireGrid" text + second_logo
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Left logo (app_logo.png) - 80dp
+                        Image(
+                            painter = painterResource(id = R.drawable.app_logo),
+                            contentDescription = "App Logo",
+                            modifier = Modifier.size(80.dp),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
                         )
-                    } else {
-                        Text("Login")
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        // FireGrid text - reduced size
+                        Text(
+                            text = buildAnnotatedString {
+                                withStyle(style = SpanStyle(color = Color(0xFFFF6B35))) {
+                                    append("Fire")
+                                }
+                                withStyle(style = SpanStyle(color = Color(0xFFFF4500))) {
+                                    append("Grid")
+                                }
+                            },
+                            style = MaterialTheme.typography.headlineLarge,
+                            fontSize = 30.sp
+                        )
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        // Right logo (second_logo.png) - 100dp (MUCH LARGER than left and text)
+                        Image(
+                            painter = painterResource(id = R.drawable.app_logo),
+                            contentDescription = "Second Logo",
+                            modifier = Modifier.size(80.dp),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                        )
                     }
+
+                    Spacer(modifier = Modifier.height(48.dp))
+
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = {
+                            email = it
+                            if (uiState.error != null) {
+                                viewModel.clearError()
+                            }
+                        },
+                        label = { Text("Email") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        enabled = !uiState.isLoading,
+                        isError = uiState.error != null
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = {
+                            password = it
+                            if (uiState.error != null) {
+                                viewModel.clearError()
+                            }
+                        },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Text(
+                                    text = if (passwordVisible) "👁" else "👁‍🗨️",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !uiState.isLoading,
+                        isError = uiState.error != null
+                    )
+
+                    if (uiState.error != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFFFEBEE),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp)
+                            ) {
+                                Text(
+                                    text = "Login Error",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFD32F2F)
+                                )
+                                Text(
+                                    text = uiState.error!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFD32F2F)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = {
+                            showForgotPasswordDialog = true
+                        }) {
+                            Text(
+                                "Forgot Password?",
+                                color = Color.Black
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = {
+                            viewModel.signIn(email, password)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        enabled = !uiState.isLoading && email.isNotBlank() && password.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFF6B35)
+                        )
+                    ) {
+                        if (uiState.isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Text("Login")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    TextButton(onClick = onNavigateToSignUp) {
+                        Text(
+                            "Don't have an account? Sign Up",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(32.dp))
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                TextButton(onClick = onNavigateToSignUp) {
-                    Text(
-                        "Don't have an account? Sign Up",
-                        style = MaterialTheme.typography.bodyMedium
+                // Bottom BFP Logo - positioned at the absolute bottom
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 24.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.bfp_logo),
+                        contentDescription = "BFP Logo",
+                        modifier = Modifier.size(80.dp)
                     )
                 }
             }
@@ -978,6 +1155,8 @@ fun SignUpScreen(
 
 @Composable
 fun MainApp(userName: String, onLogout: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
     var selectedMunicipality by rememberSaveable { mutableStateOf<String?>(null) }
     var showAddHydrantScreen by rememberSaveable { mutableStateOf(false) }
@@ -990,35 +1169,56 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
     var showReportProblemScreen by rememberSaveable { mutableStateOf(false) }
     var showAboutAppScreen by rememberSaveable { mutableStateOf(false) }
     var showTermsPrivacyScreen by rememberSaveable { mutableStateOf(false) }
-
-    // NEW: Add state for showing invalid coordinates filter
+    var showSettingsScreen by rememberSaveable { mutableStateOf(false) }
     var showInvalidCoordinatesOnly by rememberSaveable { mutableStateOf(false) }
+
+    // ADD THIS: For double back to exit
+    var backPressedOnce by remember { mutableStateOf(false) }
 
     val favoritesScrollState = androidx.compose.foundation.lazy.rememberLazyListState()
 
+    // ADD THIS: Reset backPressedOnce after 2 seconds
+    LaunchedEffect(backPressedOnce) {
+        if (backPressedOnce) {
+            kotlinx.coroutines.delay(2000)
+            backPressedOnce = false
+        }
+    }
+
     when {
         showHelpFaqScreen -> {
+            BackHandler { showHelpFaqScreen = false }
             HelpFaqScreen(onBack = { showHelpFaqScreen = false })
         }
         showContactSupportScreen -> {
+            BackHandler { showContactSupportScreen = false }
             ContactSupportScreen(onBack = { showContactSupportScreen = false })
         }
         showReportProblemScreen -> {
+            BackHandler { showReportProblemScreen = false }
             ReportProblemScreen(onBack = { showReportProblemScreen = false })
         }
         showAboutAppScreen -> {
+            BackHandler { showAboutAppScreen = false }
             AboutAppScreen(onBack = { showAboutAppScreen = false })
         }
         showTermsPrivacyScreen -> {
+            BackHandler { showTermsPrivacyScreen = false }
             TermsPrivacyScreen(onBack = { showTermsPrivacyScreen = false })
         }
+        showSettingsScreen -> {
+            BackHandler { showSettingsScreen = false }
+            SettingsScreen(onBack = { showSettingsScreen = false })
+        }
         selectedHydrantForView != null -> {
+            BackHandler { selectedHydrantForView = null }
             ViewHydrantLocationScreen(
                 hydrant = selectedHydrantForView!!,
                 onBack = { selectedHydrantForView = null }
             )
         }
         selectedHydrantForEdit != null && selectedMunicipality != null -> {
+            BackHandler { selectedHydrantForEdit = null }
             EditFireHydrantScreen(
                 hydrant = selectedHydrantForEdit!!,
                 onBack = { selectedHydrantForEdit = null },
@@ -1027,10 +1227,10 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         showHydrantMapScreen && selectedMunicipality != null -> {
+            BackHandler { showHydrantMapScreen = false }
             FireHydrantMapScreen(
                 municipalityName = selectedMunicipality!!,
                 onBack = { showHydrantMapScreen = false },
-                // NEW: Add callback for warning button
                 onShowInvalidCoordinates = {
                     showInvalidCoordinatesOnly = true
                     showHydrantMapScreen = false
@@ -1039,11 +1239,15 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         showHydrantListScreen && selectedMunicipality != null -> {
+            BackHandler {
+                showHydrantListScreen = false
+                showInvalidCoordinatesOnly = false
+            }
             FireHydrantListScreen(
                 municipalityName = selectedMunicipality!!,
                 onBack = {
                     showHydrantListScreen = false
-                    showInvalidCoordinatesOnly = false  // Reset filter when going back
+                    showInvalidCoordinatesOnly = false
                 },
                 onEditHydrant = { hydrant ->
                     selectedHydrantForEdit = hydrant
@@ -1051,12 +1255,12 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                 onViewLocation = { hydrant ->
                     selectedHydrantForView = hydrant
                 },
-                // NEW: Pass the filter state
                 showInvalidCoordinatesOnly = showInvalidCoordinatesOnly,
                 onClearInvalidFilter = { showInvalidCoordinatesOnly = false }
             )
         }
         showAddHydrantScreen && selectedMunicipality != null -> {
+            BackHandler { showAddHydrantScreen = false }
             AddFireHydrantScreen(
                 municipalityName = selectedMunicipality!!,
                 onBack = { showAddHydrantScreen = false },
@@ -1064,6 +1268,7 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         selectedMunicipality != null -> {
+            BackHandler { selectedMunicipality = null }
             MunicipalityDetailScreen(
                 municipalityName = selectedMunicipality!!,
                 onBack = { selectedMunicipality = null },
@@ -1073,6 +1278,21 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         else -> {
+            // ADD THIS: Double back to exit on main screen
+            BackHandler {
+                if (backPressedOnce) {
+                    // Exit the app
+                    (context as? ComponentActivity)?.finish()
+                } else {
+                    backPressedOnce = true
+                    android.widget.Toast.makeText(
+                        context,
+                        "Press back again to exit",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+
             NavigationSuiteScaffold(
                 navigationSuiteItems = {
                     AppDestinations.entries.forEach { destination ->
@@ -1104,6 +1324,7 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                             modifier = Modifier.padding(innerPadding),
                             userName = userName,
                             onLogout = onLogout,
+                            onSettingsClick = { showSettingsScreen = true },  // ADD THIS LINE
                             onHelpFaqClick = { showHelpFaqScreen = true },
                             onContactSupportClick = { showContactSupportScreen = true },
                             onReportProblemClick = { showReportProblemScreen = true },
@@ -3593,18 +3814,25 @@ fun MapScreen(modifier: Modifier = Modifier) {
     var isSearchingNearestHydrant by remember { mutableStateOf(false) }
     var nearestHydrant by remember { mutableStateOf<FireHydrant?>(null) }
     var nearestHydrantDistance by remember { mutableStateOf<Double?>(null) }
+    var showEmergencyDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // Directions state
+    var directionsResult by remember { mutableStateOf<DirectionsResult?>(null) }
+    var userCurrentLocation by remember { mutableStateOf<LatLng?>(null) }
+    var isLoadingDirections by remember { mutableStateOf(false) }
 
-    // Get hydrant ViewModel to load all hydrants
     val hydrantViewModel: FireHydrantViewModel = viewModel()
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
 
-    // Load all hydrants when screen opens
+    // Handle back press when drawer is open
+    BackHandler(enabled = isDrawerOpen) {
+        isDrawerOpen = false
+    }
+
     LaunchedEffect(Unit) {
         hydrantViewModel.loadAllHydrants()
     }
 
-    // Filter hydrants with valid coordinates
     val hydrantsWithValidCoords = hydrantUiState.allHydrants.filter { hydrant ->
         val lat = hydrant.latitude.toDoubleOrNull()
         val lng = hydrant.longitude.toDoubleOrNull()
@@ -3614,7 +3842,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
                 !(lat == 0.0 && lng == 0.0)
     }
 
-    // Create marker icons
     var greenMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var redMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var blueMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
@@ -3627,7 +3854,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
             val topRadius = 14f
             val bottomY = 44f
 
-            // Create green marker (In Service)
             val greenBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
             val greenCanvas = android.graphics.Canvas(greenBitmap)
             val greenPaint = android.graphics.Paint().apply {
@@ -3646,7 +3872,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
             greenCanvas.drawCircle(centerX, topRadius + 4f, 6f, greenPaint)
             greenMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(greenBitmap)
 
-            // Create red marker (Out of Service)
             val redBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
             val redCanvas = android.graphics.Canvas(redBitmap)
             val redPaint = android.graphics.Paint().apply {
@@ -3665,7 +3890,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
             redCanvas.drawCircle(centerX, topRadius + 4f, 6f, redPaint)
             redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(redBitmap)
 
-            // Create blue marker (Nearest Hydrant)
             val blueBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
             val blueCanvas = android.graphics.Canvas(blueBitmap)
             val bluePaint = android.graphics.Paint().apply {
@@ -3699,7 +3923,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // Animation for drawer slide
     val drawerOffsetX by animateDpAsState(
         targetValue = if (isDrawerOpen) 0.dp else (-280).dp,
         animationSpec = tween(
@@ -3709,7 +3932,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
         label = "drawerOffset"
     )
 
-    // Animation for scrim alpha
     val scrimAlpha by animateFloatAsState(
         targetValue = if (isDrawerOpen) 0.5f else 0f,
         animationSpec = tween(
@@ -3747,19 +3969,17 @@ fun MapScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // Function to calculate distance between two points (Haversine formula)
     fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val r = 6371 // Earth's radius in kilometers
+        val r = 6371
         val dLat = Math.toRadians(lat2 - lat1)
         val dLon = Math.toRadians(lon2 - lon1)
         val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
                 Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
                 Math.sin(dLon / 2) * Math.sin(dLon / 2)
         val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-        return r * c // Distance in kilometers
+        return r * c
     }
 
-    // Function to find nearest hydrant
     fun findNearestHydrant(userLat: Double, userLng: Double, hydrants: List<FireHydrant>): Pair<FireHydrant?, Double?> {
         var nearest: FireHydrant? = null
         var minDistance = Double.MAX_VALUE
@@ -3768,7 +3988,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
             val lat = hydrant.latitude.toDoubleOrNull() ?: continue
             val lng = hydrant.longitude.toDoubleOrNull() ?: continue
 
-            // Skip invalid coordinates
             if (lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat == 0.0 && lng == 0.0)) continue
 
             val distance = calculateDistance(userLat, userLng, lat, lng)
@@ -3781,8 +4000,131 @@ fun MapScreen(modifier: Modifier = Modifier) {
         return if (nearest != null) Pair(nearest, minDistance) else Pair(null, null)
     }
 
+    // Emergency Dialog
+    if (showEmergencyDialog) {
+        AlertDialog(
+            onDismissRequest = { showEmergencyDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFFD32F2F),
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Report Emergency",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD32F2F)
+                    )
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "Call emergency services immediately:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // BFP Hotline
+                    Surface(
+                        onClick = {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
+                            intent.data = android.net.Uri.parse("tel:911")
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFEBEE),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Emergency Hotline",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "911",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = Color(0xFFD32F2F),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Call",
+                                tint = Color(0xFFD32F2F),
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // BFP Direct
+                    Surface(
+                        onClick = {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
+                            intent.data = android.net.Uri.parse("tel:160")
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFF3E0),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Bureau of Fire Protection",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "160",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = Color(0xFFE65100),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Call",
+                                tint = Color(0xFFE65100),
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { showEmergencyDialog = false }
+                ) {
+                    Text("Close", color = Color.Gray)
+                }
+            },
+            containerColor = Color.White
+        )
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
-        // Map
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
@@ -3794,13 +4136,11 @@ fun MapScreen(modifier: Modifier = Modifier) {
                 zoomControlsEnabled = false
             )
         ) {
-            // Show all hydrants on the map
             if (markersReady && greenMarkerIcon != null && redMarkerIcon != null) {
                 hydrantsWithValidCoords.forEach { hydrant ->
                     val lat = hydrant.latitude.toDoubleOrNull() ?: return@forEach
                     val lng = hydrant.longitude.toDoubleOrNull() ?: return@forEach
 
-                    // Check if this is the nearest hydrant
                     val isNearest = nearestHydrant?.let {
                         it.id == hydrant.id && it.municipality == hydrant.municipality
                     } ?: false
@@ -3821,160 +4161,16 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     )
                 }
             }
-        }
-
-        // Hydrant count info card - Top Left (below menu button)
-        Card(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 12.dp, top = 64.dp)
-                .statusBarsPadding(),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp)
-            ) {
-                Text(
-                    text = "Hydrants: ${hydrantsWithValidCoords.size}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold
+            // Draw directions polyline
+            directionsResult?.let { directions ->
+                Polyline(
+                    points = directions.polylinePoints,
+                    color = Color(0xFF2196F3),
+                    width = 12f
                 )
-                Row(
-                    modifier = Modifier.padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = Color(0xFF4CAF50),
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = " ${hydrantsWithValidCoords.count { it.serviceStatus == "In Service" }}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = Color(0xFFEF5350),
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = " ${hydrantsWithValidCoords.count { it.serviceStatus != "In Service" }}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
             }
         }
 
-        // Nearest Hydrant Info Card (shown when hydrant is found)
-        nearestHydrant?.let { hydrant ->
-            Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(16.dp)
-                    .fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.LocationOn,
-                                contentDescription = null,
-                                tint = Color(0xFF2196F3),
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Nearest Hydrant",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF2196F3)
-                            )
-                        }
-                        IconButton(
-                            onClick = { nearestHydrant = null },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = Color.Gray,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = hydrant.hydrantName,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = hydrant.exactLocation,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.Gray
-                    )
-                    Text(
-                        text = "Municipality: ${hydrant.municipality}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        nearestHydrantDistance?.let { distance ->
-                            Surface(
-                                color = Color(0xFFE3F2FD),
-                                shape = RoundedCornerShape(16.dp)
-                            ) {
-                                Text(
-                                    text = if (distance < 1) {
-                                        "📍 %.0f meters away".format(distance * 1000)
-                                    } else {
-                                        "📍 %.2f km away".format(distance)
-                                    },
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFF1976D2),
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                        Surface(
-                            color = if (hydrant.serviceStatus == "In Service")
-                                Color(0xFF81C784) else Color(0xFFEF5350),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Text(
-                                text = hydrant.serviceStatus,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-            }
-        }
 
         // Hamburger Menu Button - Top Left
         FloatingActionButton(
@@ -4000,14 +4196,51 @@ fun MapScreen(modifier: Modifier = Modifier) {
             )
         }
 
-        // Zoom and Location Controls - Bottom Right
+        // Report Emergency Button - Top Right
+        Button(
+            onClick = { showEmergencyDialog = true },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = 12.dp, top = 12.dp)
+                .statusBarsPadding()
+                .height(40.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFFD32F2F)
+            ),
+            shape = RoundedCornerShape(8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            elevation = ButtonDefaults.buttonElevation(
+                defaultElevation = 3.dp,
+                pressedElevation = 5.dp
+            )
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Emergency",
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Zoom and Location Controls - Bottom Right (automatically moves up when card is shown)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = if (nearestHydrant != null) 180.dp else 16.dp),
+                .padding(
+                    end = 12.dp,
+                    bottom = if (nearestHydrant != null) 260.dp else 16.dp
+                ),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            // My Location Button
             FloatingActionButton(
                 onClick = {
                     if (checkLocationPermission(context)) {
@@ -4031,23 +4264,24 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 },
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(40.dp),
                 containerColor = Color.White,
                 contentColor = Color(0xFF5F6368),
                 elevation = FloatingActionButtonDefaults.elevation(
                     defaultElevation = 3.dp,
                     pressedElevation = 5.dp
                 ),
-                shape = MaterialTheme.shapes.small
+                shape = RoundedCornerShape(8.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Default.LocationOn,
+                    imageVector = Icons.Default.MyLocation,
                     contentDescription = "My Location",
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(20.dp),
                     tint = Color(0xFF5F6368)
                 )
             }
 
+            // Zoom In Button
             FloatingActionButton(
                 onClick = {
                     scope.launch {
@@ -4057,22 +4291,24 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 },
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(40.dp),
                 containerColor = Color.White,
                 contentColor = Color(0xFF5F6368),
                 elevation = FloatingActionButtonDefaults.elevation(
                     defaultElevation = 3.dp,
                     pressedElevation = 5.dp
                 ),
-                shape = MaterialTheme.shapes.small
+                shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
                     text = "+",
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color(0xFF5F6368)
+                    color = Color(0xFF5F6368),
+                    fontWeight = FontWeight.Bold
                 )
             }
 
+            // Zoom Out Button
             FloatingActionButton(
                 onClick = {
                     scope.launch {
@@ -4082,20 +4318,254 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 },
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(40.dp),
                 containerColor = Color.White,
                 contentColor = Color(0xFF5F6368),
                 elevation = FloatingActionButtonDefaults.elevation(
                     defaultElevation = 3.dp,
                     pressedElevation = 5.dp
                 ),
-                shape = MaterialTheme.shapes.small
+                shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
                     text = "−",
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color(0xFF5F6368)
+                    color = Color(0xFF5F6368),
+                    fontWeight = FontWeight.Bold
                 )
+            }
+        }
+
+        // Nearest Hydrant Info Card - Bottom Center (Full Width)
+        nearestHydrant?.let { hydrant ->
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+                    .fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    // Header Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = Color(0xFF2196F3),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Nearest Hydrant",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2196F3)
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = if (hydrant.serviceStatus == "In Service")
+                                    Color(0xFF4CAF50) else Color(0xFFEF5350),
+                                shape = RoundedCornerShape(20.dp)
+                            ) {
+                                Text(
+                                    text = hydrant.serviceStatus,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            IconButton(
+                                onClick = {
+                                    nearestHydrant = null
+                                    directionsResult = null },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Hydrant Name
+                    Text(
+                        text = hydrant.hydrantName,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF212121)
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Location - Same size as municipality
+                    Text(
+                        text = hydrant.exactLocation,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF757575)
+                    )
+
+                    // Municipality - Same size as exact location
+                    Text(
+                        text = "Municipality: ${hydrant.municipality}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF757575)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Distance and Directions Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Distance Badge - Shows directions info if available
+                        Surface(
+                            color = Color(0xFFE3F2FD),
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    tint = Color(0xFFEF5350),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (directionsResult != null) {
+                                        "${directionsResult!!.distance} • ${directionsResult!!.duration}"
+                                    } else {
+                                        nearestHydrantDistance?.let { distance ->
+                                            if (distance < 1) {
+                                                "%.0f meters away".format(distance * 1000)
+                                            } else {
+                                                "%.2f km away".format(distance)
+                                            }
+                                        } ?: "Calculating..."
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color(0xFF1976D2),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        // Directions Button - Now functional!
+                        Button(
+                            onClick = {
+                                userCurrentLocation?.let { currentLoc ->
+                                    val hydrantLat = hydrant.latitude.toDoubleOrNull()
+                                    val hydrantLng = hydrant.longitude.toDoubleOrNull()
+                                    if (hydrantLat != null && hydrantLng != null) {
+                                        isLoadingDirections = true
+                                        scope.launch {
+                                            val result = fetchDirections(
+                                                origin = currentLoc,
+                                                destination = LatLng(hydrantLat, hydrantLng)
+                                            )
+                                            directionsResult = result
+                                            isLoadingDirections = false
+
+                                            if (result == null) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "Could not fetch directions",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    }
+                                } ?: run {
+                                    // Get current location first
+                                    if (checkLocationPermission(context)) {
+                                        getCurrentLocation(context) { location ->
+                                            userCurrentLocation = LatLng(location.latitude, location.longitude)
+                                            val hydrantLat = hydrant.latitude.toDoubleOrNull()
+                                            val hydrantLng = hydrant.longitude.toDoubleOrNull()
+                                            if (hydrantLat != null && hydrantLng != null) {
+                                                isLoadingDirections = true
+                                                scope.launch {
+                                                    val result = fetchDirections(
+                                                        origin = LatLng(location.latitude, location.longitude),
+                                                        destination = LatLng(hydrantLat, hydrantLng)
+                                                    )
+                                                    directionsResult = result
+                                                    isLoadingDirections = false
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Location permission required",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            },
+                            enabled = !isLoadingDirections,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF4CAF50)
+                            ),
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            elevation = ButtonDefaults.buttonElevation(
+                                defaultElevation = 2.dp,
+                                pressedElevation = 4.dp
+                            )
+                        ) {
+                            if (isLoadingDirections) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Directions,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isLoadingDirections) "Loading..." else "Directions",
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -4109,7 +4579,8 @@ fun MapScreen(modifier: Modifier = Modifier) {
             ) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(24.dp),
@@ -4126,7 +4597,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        // Dark scrim with animation - TAP TO CLOSE
+        // Scrim for drawer
         if (scrimAlpha > 0f) {
             Box(
                 modifier = Modifier
@@ -4139,7 +4610,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
             )
         }
 
-        // Drawer Content with slide animation
+        // Drawer
         Surface(
             modifier = Modifier
                 .fillMaxHeight()
@@ -4152,33 +4623,88 @@ fun MapScreen(modifier: Modifier = Modifier) {
             Column(
                 modifier = Modifier.fillMaxSize()
             ) {
-                // Drawer Header
+                // Drawer Header with Hydrant Count Card
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color(0xFFFF6B35))
                         .statusBarsPadding()
-                        .padding(24.dp)
+                        .padding(20.dp)
                 ) {
-                    Column {
-                        Text(
-                            text = buildAnnotatedString {
-                                withStyle(style = SpanStyle(color = Color.White)) {
-                                    append("Fire")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column {
+                            Text(
+                                text = buildAnnotatedString {
+                                    withStyle(style = SpanStyle(color = Color.White)) {
+                                        append("Fire")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFFFFE0B2))) {
+                                        append("Grid")
+                                    }
+                                },
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Map Options",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.8f)
+                            )
+                        }
+
+                        // Hydrant Count Card
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(8.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "Hydrants: ${hydrantsWithValidCoords.size}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Black
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.LocationOn,
+                                        contentDescription = null,
+                                        tint = Color(0xFF4CAF50),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = " ${hydrantsWithValidCoords.count { it.serviceStatus == "In Service" }}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.Black
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.LocationOn,
+                                        contentDescription = null,
+                                        tint = Color(0xFFEF5350),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = " ${hydrantsWithValidCoords.count { it.serviceStatus != "In Service" }}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.Black
+                                    )
                                 }
-                                withStyle(style = SpanStyle(color = Color(0xFFFFE0B2))) {
-                                    append("Grid")
-                                }
-                            },
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Map Options",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.8f)
-                        )
+                            }
+                        }
                     }
                 }
 
@@ -4188,13 +4714,14 @@ fun MapScreen(modifier: Modifier = Modifier) {
                 Surface(
                     onClick = {
                         isDrawerOpen = false
+                        directionsResult = null
                         if (checkLocationPermission(context)) {
                             isSearchingNearestHydrant = true
                             isMyLocationEnabled = true
 
                             getCurrentLocation(context) { location ->
+                                userCurrentLocation = LatLng(location.latitude, location.longitude)
                                 scope.launch {
-                                    // Use already loaded hydrants
                                     val allHydrants = hydrantUiState.allHydrants
                                     if (allHydrants.isNotEmpty()) {
                                         val (nearest, distance) = findNearestHydrant(
@@ -4305,7 +4832,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     }
                 }
 
-// Go to My Location
+                // Go to My Location
                 Surface(
                     onClick = {
                         isDrawerOpen = false
@@ -4341,9 +4868,9 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Default.LocationOn,
+                            imageVector = Icons.Default.MyLocation,
                             contentDescription = null,
-                            tint = Color(0xFF5F6368),  // Normal gray color
+                            tint = Color(0xFF5F6368),
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(16.dp))
@@ -4367,7 +4894,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
                 )
 
-                // Legend Item - In Service
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -4387,7 +4913,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     )
                 }
 
-                // Legend Item - Out of Service
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -4407,7 +4932,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     )
                 }
 
-                // Legend Item - Nearest Hydrant
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -4429,7 +4953,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Footer
                 HorizontalDivider(
                     modifier = Modifier.padding(horizontal = 16.dp),
                     color = Color(0xFFE0E0E0)
@@ -4661,6 +5184,7 @@ fun ProfileScreen(
     modifier: Modifier = Modifier,
     userName: String,
     onLogout: () -> Unit,
+    onSettingsClick: () -> Unit,  // ADD THIS NEW PARAMETER
     onHelpFaqClick: () -> Unit,
     onContactSupportClick: () -> Unit,
     onReportProblemClick: () -> Unit,
@@ -4758,7 +5282,7 @@ fun ProfileScreen(
             Column {
                 ProfileMenuItem(
                     title = "Settings",
-                    onClick = { }
+                    onClick = onSettingsClick  // CHANGE FROM { } TO onSettingsClick
                 )
 
                 HorizontalDivider(
@@ -5586,6 +6110,413 @@ fun ReportProblemScreen(onBack: () -> Unit) {
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(onBack: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var showChangePasswordDialog by remember { mutableStateOf(false) }
+
+    // Change Password Dialog
+    if (showChangePasswordDialog) {
+        ChangePasswordDialog(
+            onDismiss = { showChangePasswordDialog = false },
+            onSuccess = {
+                showChangePasswordDialog = false
+                android.widget.Toast.makeText(
+                    context,
+                    "Password changed successfully!",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Settings",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFFFF6B35)
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFFF5F5F5))
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Account Settings Section
+            Text(
+                text = "Account Settings",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF666666),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Change Password Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Surface(
+                    onClick = { showChangePasswordDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFFE0B2)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("🔒", fontSize = 20.sp)
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    text = "Change Password",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "Update your account password",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowRight,
+                            contentDescription = "Change Password",
+                            tint = Color(0xFF757575)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // App Settings Section
+            Text(
+                text = "App Settings",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF666666),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Notifications Card (placeholder for future feature)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFBBDEFB)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("🔔", fontSize = 20.sp)
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                text = "Notifications",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Coming soon",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Soon",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFFF6B35),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // App Version
+            Text(
+                text = "FireGrid Version 1.0.0",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+fun ChangePasswordDialog(
+    onDismiss: () -> Unit,
+    onSuccess: () -> Unit
+) {
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmNewPassword by remember { mutableStateOf("") }
+    var currentPasswordVisible by remember { mutableStateOf(false) }
+    var newPasswordVisible by remember { mutableStateOf(false) }
+    var confirmPasswordVisible by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+
+    val auth = FirebaseAuth.getInstance()
+    val user = auth.currentUser
+
+    AlertDialog(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        title = {
+            Text(
+                text = "Change Password",
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFFF6B35)
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Current Password
+                OutlinedTextField(
+                    value = currentPassword,
+                    onValueChange = {
+                        currentPassword = it
+                        errorMessage = ""
+                    },
+                    label = { Text("Current Password") },
+                    singleLine = true,
+                    visualTransformation = if (currentPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { currentPasswordVisible = !currentPasswordVisible }) {
+                            Text(
+                                text = if (currentPasswordVisible) "👁" else "👁‍🗨️",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFFF6B35),
+                        focusedLabelColor = Color(0xFFFF6B35)
+                    )
+                )
+
+                // New Password
+                OutlinedTextField(
+                    value = newPassword,
+                    onValueChange = {
+                        newPassword = it
+                        errorMessage = ""
+                    },
+                    label = { Text("New Password") },
+                    singleLine = true,
+                    visualTransformation = if (newPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { newPasswordVisible = !newPasswordVisible }) {
+                            Text(
+                                text = if (newPasswordVisible) "👁" else "👁‍🗨️",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFFF6B35),
+                        focusedLabelColor = Color(0xFFFF6B35)
+                    )
+                )
+
+                // Password requirements hint
+                Text(
+                    text = "Must have: 12 chars, 1 uppercase, 1 number, 1 special char",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+
+                // Confirm New Password
+                OutlinedTextField(
+                    value = confirmNewPassword,
+                    onValueChange = {
+                        confirmNewPassword = it
+                        errorMessage = ""
+                    },
+                    label = { Text("Confirm New Password") },
+                    singleLine = true,
+                    visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
+                            Text(
+                                text = if (confirmPasswordVisible) "👁" else "👁‍🗨️",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFFF6B35),
+                        focusedLabelColor = Color(0xFFFF6B35)
+                    )
+                )
+
+                // Error Message
+                if (errorMessage.isNotEmpty()) {
+                    Text(
+                        text = errorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    // Validation
+                    when {
+                        currentPassword.isBlank() -> {
+                            errorMessage = "Please enter your current password"
+                        }
+                        newPassword.isBlank() -> {
+                            errorMessage = "Please enter a new password"
+                        }
+                        confirmNewPassword.isBlank() -> {
+                            errorMessage = "Please confirm your new password"
+                        }
+                        newPassword != confirmNewPassword -> {
+                            errorMessage = "New passwords do not match"
+                        }
+                        currentPassword == newPassword -> {
+                            errorMessage = "New password must be different from current password"
+                        }
+                        else -> {
+                            val passwordValidationError = validatePassword(newPassword)
+                            if (passwordValidationError != null) {
+                                errorMessage = passwordValidationError
+                            } else {
+                                // Proceed with password change
+                                isLoading = true
+                                errorMessage = ""
+
+                                val email = user?.email
+                                if (email != null) {
+                                    // Re-authenticate user first
+                                    val credential = com.google.firebase.auth.EmailAuthProvider.getCredential(email, currentPassword)
+                                    user.reauthenticate(credential)
+                                        .addOnSuccessListener {
+                                            // Now update password
+                                            user.updatePassword(newPassword)
+                                                .addOnSuccessListener {
+                                                    isLoading = false
+                                                    onSuccess()
+                                                }
+                                                .addOnFailureListener { e ->
+                                                    isLoading = false
+                                                    errorMessage = "Failed to update password: ${e.message}"
+                                                }
+                                        }
+                                        .addOnFailureListener { e ->
+                                            isLoading = false
+                                            errorMessage = when {
+                                                e.message?.contains("password") == true -> "Current password is incorrect"
+                                                e.message?.contains("network") == true -> "Network error. Please check your connection"
+                                                else -> "Authentication failed: ${e.message}"
+                                            }
+                                        }
+                                } else {
+                                    isLoading = false
+                                    errorMessage = "User not found. Please log in again."
+                                }
+                            }
+                        }
+                    }
+                },
+                enabled = !isLoading,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFFF6B35)
+                )
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Change Password")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isLoading
+            ) {
+                Text("Cancel", color = Color.Gray)
+            }
+        },
+        containerColor = Color.White
+    )
 }
 
 // Helper Composables for Profile Screen

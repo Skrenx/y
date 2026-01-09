@@ -21,16 +21,18 @@
         <!-- Add Google Maps API Key here -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyCXdOO2gDbjoBx8XMn2fidSlek0aKevMYs"/>
+            android:value="AIzaSyCdwrCeDEi3tPzjg6-2lGNueLJqHJFv1ZQ"/>
+
+        <service
+            android:name=".LogoutService"
+            android:stopWithTask="false" />
 
         <activity
             android:name=".MainActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.HYDRANT">
+            android:theme="@style/Theme.HYDRANT.Starting"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
