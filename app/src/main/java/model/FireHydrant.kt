@@ -32,9 +32,9 @@ data class FireHydrant(
     @get:PropertyName("Municipality") @set:PropertyName("Municipality")
     var municipality: String = "",
 
-    @get:PropertyName("Timestamp") @set:PropertyName("Timestamp")
-    var timestamp: Long = System.currentTimeMillis()
+    @get:PropertyName("LastUpdated") @set:PropertyName("LastUpdated")
+    var lastUpdated: String = ""  // Format: "January 10, 2026 at 3:33:09 PM UTC+8"
 ) {
     // No-argument constructor required for Firebase
-    constructor() : this("", "", "", "", "", "", "In Service", "", "", 0L)
+    constructor() : this("", "", "", "", "", "", "In Service", "", "", "")
 }

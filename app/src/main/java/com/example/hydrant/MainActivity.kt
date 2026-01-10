@@ -59,7 +59,6 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hydrant.viewmodel.AuthViewModel
 import com.example.hydrant.viewmodel.FireHydrantViewModel
-import com.example.hydrant.model.FireHydrant
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.userProfileChangeRequest
 import kotlinx.coroutines.launch
@@ -94,6 +93,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.ktx.Firebase
+import com.example.hydrant.model.FireHydrant
 
 // Weather Data Classes
 data class WeatherResponse(
@@ -143,6 +145,14 @@ data class DirectionsResult(
     val polylinePoints: List<LatLng>,
     val distance: String,
     val duration: String
+)
+
+// Data class for user info
+data class UserInfo(
+    val uid: String,
+    val email: String,
+    val displayName: String,
+    val isAdmin: Boolean
 )
 
 // Weather API Functions
@@ -377,6 +387,18 @@ fun decodePolyline(encoded: String): List<LatLng> {
         poly.add(p)
     }
     return poly
+}
+
+fun extractHydrantNumber(hydrantId: String): Int {
+    return try {
+        val numberPart = hydrantId
+            .replace("Id_", "", ignoreCase = true)
+            .replace("Hydrant Id_", "", ignoreCase = true)
+            .trim()
+        numberPart.toIntOrNull() ?: Int.MAX_VALUE
+    } catch (e: Exception) {
+        Int.MAX_VALUE
+    }
 }
 
 fun validatePassword(password: String): String? {
@@ -830,7 +852,6 @@ fun SignUpScreen(
     LaunchedEffect(uiState.isAuthenticated) {
         if (uiState.isAuthenticated) {
             val user = FirebaseAuth.getInstance().currentUser
-            // Combine names: First Middle Last (middle name is optional)
             val fullName = if (middleName.isNotBlank()) {
                 "${firstName.trim()} ${middleName.trim()} ${lastName.trim()}"
             } else {
@@ -840,10 +861,26 @@ fun SignUpScreen(
                 displayName = fullName.trim()
             }
             user?.updateProfile(profileUpdates)?.addOnCompleteListener {
-                // Sign out after successful registration so user goes back to login
-                FirebaseAuth.getInstance().signOut()
-                viewModel.resetAuthState()
-                onSignUpComplete("Account created successfully! Please login.")
+                // Save user to Firestore - USING EMAIL AS DOCUMENT ID
+                user.let { firebaseUser ->
+                    val emailKey = firebaseUser.email?.lowercase() ?: "" // Get email as key
+
+                    val userData = hashMapOf(
+                        "uid" to firebaseUser.uid,
+                        "email" to emailKey,
+                        "displayName" to fullName.trim(),
+                        "createdAt" to com.google.firebase.Timestamp.now()
+                    )
+
+                    Firebase.firestore.collection("users")
+                        .document(emailKey)  // ✅ Use EMAIL as document ID instead of UID
+                        .set(userData)
+                        .addOnCompleteListener {
+                            FirebaseAuth.getInstance().signOut()
+                            viewModel.resetAuthState()
+                            onSignUpComplete("Account created successfully! Please login.")
+                        }
+                }
             }
         }
     }
@@ -1156,6 +1193,8 @@ fun SignUpScreen(
 @Composable
 fun MainApp(userName: String, onLogout: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val auth = FirebaseAuth.getInstance()
+    val userEmail = auth.currentUser?.email ?: ""  // ✅ ADD THIS LINE
 
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
     var selectedMunicipality by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1170,14 +1209,14 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
     var showAboutAppScreen by rememberSaveable { mutableStateOf(false) }
     var showTermsPrivacyScreen by rememberSaveable { mutableStateOf(false) }
     var showSettingsScreen by rememberSaveable { mutableStateOf(false) }
+    var showAddAdminScreen by rememberSaveable { mutableStateOf(false) }
+    var showRemoveAdminScreen by rememberSaveable { mutableStateOf(false) }
     var showInvalidCoordinatesOnly by rememberSaveable { mutableStateOf(false) }
 
-    // ADD THIS: For double back to exit
     var backPressedOnce by remember { mutableStateOf(false) }
 
     val favoritesScrollState = androidx.compose.foundation.lazy.rememberLazyListState()
 
-    // ADD THIS: Reset backPressedOnce after 2 seconds
     LaunchedEffect(backPressedOnce) {
         if (backPressedOnce) {
             kotlinx.coroutines.delay(2000)
@@ -1206,9 +1245,47 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             BackHandler { showTermsPrivacyScreen = false }
             TermsPrivacyScreen(onBack = { showTermsPrivacyScreen = false })
         }
+        showAddAdminScreen -> {
+            BackHandler { showAddAdminScreen = false }
+            AddAdminScreen(
+                onBack = { showAddAdminScreen = false },
+                onSuccess = { email ->
+                    showAddAdminScreen = false
+                    android.widget.Toast.makeText(
+                        context,
+                        "$email has been promoted to admin!",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            )
+        }
+        showRemoveAdminScreen -> {
+            BackHandler { showRemoveAdminScreen = false }
+            RemoveAdminScreen(
+                onBack = { showRemoveAdminScreen = false },
+                onSuccess = { email ->
+                    showRemoveAdminScreen = false
+                    android.widget.Toast.makeText(
+                        context,
+                        "$email has been removed from admin!",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            )
+        }
         showSettingsScreen -> {
             BackHandler { showSettingsScreen = false }
-            SettingsScreen(onBack = { showSettingsScreen = false })
+            SettingsScreen(
+                onBack = { showSettingsScreen = false },
+                onAddAdminClick = {
+                    showSettingsScreen = false
+                    showAddAdminScreen = true
+                },
+                onRemoveAdminClick = {
+                    showSettingsScreen = false
+                    showRemoveAdminScreen = true
+                }
+            )
         }
         selectedHydrantForView != null -> {
             BackHandler { selectedHydrantForView = null }
@@ -1278,10 +1355,8 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         else -> {
-            // ADD THIS: Double back to exit on main screen
             BackHandler {
                 if (backPressedOnce) {
-                    // Exit the app
                     (context as? ComponentActivity)?.finish()
                 } else {
                     backPressedOnce = true
@@ -1323,8 +1398,9 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                         AppDestinations.PROFILE -> ProfileScreen(
                             modifier = Modifier.padding(innerPadding),
                             userName = userName,
+                            userEmail = userEmail,  // ✅ ADD THIS LINE
                             onLogout = onLogout,
-                            onSettingsClick = { showSettingsScreen = true },  // ADD THIS LINE
+                            onSettingsClick = { showSettingsScreen = true },
                             onHelpFaqClick = { showHelpFaqScreen = true },
                             onContactSupportClick = { showContactSupportScreen = true },
                             onReportProblemClick = { showReportProblemScreen = true },
@@ -1395,7 +1471,7 @@ fun FireHydrantListScreen(
         }
 
         matchesSearch && matchesFilter && matchesInvalidFilter
-    }
+    }.sortedBy { extractHydrantNumber(it.id) }
 
     // Reusable Filter Dropdown Menu content
     @Composable
@@ -2851,9 +2927,11 @@ fun MunicipalityDetailScreen(
     onShowHydrantList: () -> Unit,
     onShowHydrantMap: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var weatherData by remember { mutableStateOf<DailyWeather?>(null) }
     var isWeatherLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isGeneratingReport by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val hydrantViewModel: FireHydrantViewModel = viewModel()
@@ -2874,6 +2952,7 @@ fun MunicipalityDetailScreen(
     }
 
     LaunchedEffect(municipalityName) {
+        hydrantViewModel.loadHydrants(municipalityName)
         hydrantViewModel.loadHydrantCounts(municipalityName)
     }
 
@@ -2890,6 +2969,152 @@ fun MunicipalityDetailScreen(
     val inService = hydrantUiState.inServiceCount
     val totalHydrants = outOfService + inService
 
+    // Function to convert decimal degrees to DMS format
+    fun decimalToDMS(decimal: Double, isLatitude: Boolean): String {
+        val absolute = kotlin.math.abs(decimal)
+        val degrees = absolute.toInt()
+        val minutesDecimal = (absolute - degrees) * 60
+        val minutes = minutesDecimal.toInt()
+        val seconds = (minutesDecimal - minutes) * 60
+
+        val direction = if (isLatitude) {
+            if (decimal >= 0) "N" else "S"
+        } else {
+            if (decimal >= 0) "E" else "W"
+        }
+
+        return "%d° %02d' %.2f\" %s".format(degrees, minutes, seconds, direction)
+    }
+
+    // Function to generate CSV/Table report
+    fun generateReport() {
+        isGeneratingReport = true
+        scope.launch {
+            try {
+                val hydrants = hydrantUiState.hydrants
+
+                if (hydrants.isEmpty()) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "No hydrants to generate report",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    isGeneratingReport = false
+                    return@launch
+                }
+
+                // Create CSV content matching BFP format
+                val csvBuilder = StringBuilder()
+
+                // Header row
+                csvBuilder.appendLine("STATION/OWNED BY,NUMBER OF FIRE HYDRANT,EXACT LOCATION/ADDRESS,LATITUDE,LONGITUDE,TYPE/COLOR,OPERATIONAL,NON-OPERATIONAL,REMARKS")
+
+                // Data rows
+                hydrants.forEachIndexed { index, hydrant ->
+                    val stationName = "$municipalityName FS"
+                    val hydrantNumber = index + 1
+
+                    // Convert coordinates to DMS format if valid
+                    val lat = hydrant.latitude.toDoubleOrNull()
+                    val lng = hydrant.longitude.toDoubleOrNull()
+
+                    val latitudeDMS = if (lat != null && lat != 0.0) {
+                        decimalToDMS(lat, true)
+                    } else {
+                        hydrant.latitude
+                    }
+
+                    val longitudeDMS = if (lng != null && lng != 0.0) {
+                        decimalToDMS(lng, false)
+                    } else {
+                        hydrant.longitude
+                    }
+
+                    // Determine operational status
+                    val operational = if (hydrant.serviceStatus == "In Service") "1" else ""
+                    val nonOperational = if (hydrant.serviceStatus == "Out of Service") "1" else ""
+
+                    // Escape commas in fields
+                    val exactLocation = "\"${hydrant.exactLocation.replace("\"", "\"\"")}\""
+                    val typeColor = "\"${hydrant.typeColor.replace("\"", "\"\"")}\""
+                    val remarks = "\"${hydrant.remarks.replace("\"", "\"\"")}\""
+
+                    csvBuilder.appendLine("$stationName,$hydrantNumber,$exactLocation,$latitudeDMS,$longitudeDMS,$typeColor,$operational,$nonOperational,$remarks")
+                }
+
+                // Create a more readable text version for sharing
+                val textBuilder = StringBuilder()
+                textBuilder.appendLine("FIRE HYDRANT INVENTORY REPORT")
+                textBuilder.appendLine("Municipality: $municipalityName")
+                textBuilder.appendLine("Date Generated: ${java.text.SimpleDateFormat("MMMM dd, yyyy", java.util.Locale.ENGLISH).format(java.util.Date())}")
+                textBuilder.appendLine("Total Hydrants: $totalHydrants | In Service: $inService | Out of Service: $outOfService")
+                textBuilder.appendLine()
+                textBuilder.appendLine("=".repeat(120))
+                textBuilder.appendLine(String.format("%-15s | %-4s | %-30s | %-18s | %-18s | %-15s | %-5s | %-5s | %-20s",
+                    "STATION", "NO.", "EXACT LOCATION", "LATITUDE", "LONGITUDE", "TYPE/COLOR", "OPER", "NON-OP", "REMARKS"))
+                textBuilder.appendLine("=".repeat(120))
+
+                hydrants.forEachIndexed { index, hydrant ->
+                    val stationName = "$municipalityName FS"
+                    val hydrantNumber = (index + 1).toString()
+
+                    val lat = hydrant.latitude.toDoubleOrNull()
+                    val lng = hydrant.longitude.toDoubleOrNull()
+
+                    val latitudeDMS = if (lat != null && lat != 0.0) {
+                        decimalToDMS(lat, true)
+                    } else {
+                        hydrant.latitude.take(18)
+                    }
+
+                    val longitudeDMS = if (lng != null && lng != 0.0) {
+                        decimalToDMS(lng, false)
+                    } else {
+                        hydrant.longitude.take(18)
+                    }
+
+                    val operational = if (hydrant.serviceStatus == "In Service") "1" else ""
+                    val nonOperational = if (hydrant.serviceStatus == "Out of Service") "1" else ""
+
+                    textBuilder.appendLine(String.format("%-15s | %-4s | %-30s | %-18s | %-18s | %-15s | %-5s | %-5s | %-20s",
+                        stationName.take(15),
+                        hydrantNumber,
+                        hydrant.exactLocation.take(30),
+                        latitudeDMS.take(18),
+                        longitudeDMS.take(18),
+                        hydrant.typeColor.take(15),
+                        operational,
+                        nonOperational,
+                        hydrant.remarks.take(20)
+                    ))
+                }
+
+                textBuilder.appendLine("=".repeat(120))
+                textBuilder.appendLine()
+                textBuilder.appendLine("CSV DATA (for spreadsheet import):")
+                textBuilder.appendLine("-".repeat(50))
+                textBuilder.append(csvBuilder.toString())
+
+                // Share the report
+                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Fire Hydrant Report - $municipalityName")
+                    putExtra(android.content.Intent.EXTRA_TEXT, textBuilder.toString())
+                }
+                context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Report"))
+
+                isGeneratingReport = false
+            } catch (e: Exception) {
+                isGeneratingReport = false
+                android.widget.Toast.makeText(
+                    context,
+                    "Failed to generate report: ${e.message}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2901,6 +3126,38 @@ fun MunicipalityDetailScreen(
                             contentDescription = "Back",
                             tint = Color.White
                         )
+                    }
+                },
+                actions = {
+                    // Generate Report Button - Rectangle shape like other buttons
+                    Button(
+                        onClick = { generateReport() },
+                        enabled = !isGeneratingReport && !hydrantUiState.isLoading,
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .height(40.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4CAF50)
+                        ),
+                        shape = RoundedCornerShape(8.dp), // Same as other buttons
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                    ) {
+                        if (isGeneratingReport) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                text = "Generate\nReport",
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                lineHeight = 14.sp
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -3045,16 +3302,15 @@ fun MunicipalityDetailScreen(
                 }
             }
 
-            // Total Hydrants Card - Compact white version
-            // Total Hydrants Card - Compact faded blue version
+            // Total Hydrants Card
             item {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .height(56.dp),  // Same height as Add Fire Hydrant button
+                        .height(56.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFBBDEFB)  // Light faded blue (like the others)
+                        containerColor = Color(0xFFBBDEFB)
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
@@ -3074,7 +3330,6 @@ fun MunicipalityDetailScreen(
                     }
                 }
             }
-            // ===== END OF NEW Total Hydrants Card =====
 
             item {
                 Button(
@@ -5183,8 +5438,9 @@ fun MunicipalityButton(name: String, onClick: () -> Unit) {
 fun ProfileScreen(
     modifier: Modifier = Modifier,
     userName: String,
+    userEmail: String,  // ✅ NEW PARAMETER
     onLogout: () -> Unit,
-    onSettingsClick: () -> Unit,  // ADD THIS NEW PARAMETER
+    onSettingsClick: () -> Unit,
     onHelpFaqClick: () -> Unit,
     onContactSupportClick: () -> Unit,
     onReportProblemClick: () -> Unit,
@@ -5192,6 +5448,24 @@ fun ProfileScreen(
     onTermsPrivacyClick: () -> Unit
 ) {
     val viewModel: AuthViewModel = viewModel()
+    val firestore = Firebase.firestore
+    var isAdmin by remember { mutableStateOf(false) }
+    var isCheckingAdmin by remember { mutableStateOf(true) }
+
+    // ✅ Check if user is admin
+    LaunchedEffect(userEmail) {
+        firestore.collection("admins")
+            .document(userEmail.lowercase())
+            .get()
+            .addOnSuccessListener { document ->
+                isAdmin = document.exists()
+                isCheckingAdmin = false
+            }
+            .addOnFailureListener {
+                isAdmin = false
+                isCheckingAdmin = false
+            }
+    }
 
     val initials = userName.split(" ")
         .mapNotNull { it.firstOrNull()?.toString() }
@@ -5244,26 +5518,44 @@ fun ProfileScreen(
                         fontWeight = FontWeight.Bold
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Button(
-                        onClick = { },
-                        modifier = Modifier
-                            .wrapContentWidth()
-                            .height(32.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black
-                        ),
-                        shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            "Apply as Admin",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium
+                    // ✅ Only show badge if user is admin (nothing shown for ordinary users)
+                    if (isCheckingAdmin) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        // Show loading indicator while checking
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
                         )
+                    } else if (isAdmin) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        // ✅ Show Admin Badge (only for admins)
+                        Surface(
+                            modifier = Modifier.wrapContentWidth(),
+                            color = Color.White,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "✓",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color(0xFF4CAF50),
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Admin",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Black,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
+                    // ✅ For ordinary users: nothing is shown below the name (no button, no badge)
                 }
             }
         }
@@ -5282,7 +5574,7 @@ fun ProfileScreen(
             Column {
                 ProfileMenuItem(
                     title = "Settings",
-                    onClick = onSettingsClick  // CHANGE FROM { } TO onSettingsClick
+                    onClick = onSettingsClick
                 )
 
                 HorizontalDivider(
@@ -6114,11 +6406,14 @@ fun ReportProblemScreen(onBack: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onAddAdminClick: () -> Unit,
+    onRemoveAdminClick: () -> Unit // NEW: Required parameter
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var showChangePasswordDialog by remember { mutableStateOf(false) }
 
-    // Change Password Dialog
     if (showChangePasswordDialog) {
         ChangePasswordDialog(
             onDismiss = { showChangePasswordDialog = false },
@@ -6230,6 +6525,122 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Admin Settings Section
+            Text(
+                text = "Admin Settings",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF666666),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Add Admin Card - CLICKING THIS NAVIGATES TO ADD ADMIN SCREEN
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Surface(
+                    onClick = onAddAdminClick,  // THIS CALLS THE NAVIGATION CALLBACK
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFC8E6C9)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("👑", fontSize = 20.sp)
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    text = "Add Admin",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "Promote a user to admin",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowRight,
+                            contentDescription = "Add Admin",
+                            tint = Color(0xFF757575)
+                        )
+                    }
+                }
+            }
+            // ADD THIS NEW CARD - Remove Admin Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Surface(
+                    onClick = onRemoveAdminClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFFCDD2)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("❌", fontSize = 20.sp)
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    text = "Remove Admin",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "Revoke admin privileges",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowRight,
+                            contentDescription = "Remove Admin",
+                            tint = Color(0xFF757575)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // App Settings Section
             Text(
                 text = "App Settings",
@@ -6239,7 +6650,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // Notifications Card (placeholder for future feature)
+            // Notifications Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -6289,7 +6700,6 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // App Version
             Text(
                 text = "FireGrid Version 1.0.0",
                 style = MaterialTheme.typography.bodySmall,
@@ -6297,6 +6707,790 @@ fun SettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddAdminScreen(
+    onBack: () -> Unit,
+    onSuccess: (String) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var email by remember { mutableStateOf("") }
+    var uid by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+
+    val firestore = Firebase.firestore
+    val auth = FirebaseAuth.getInstance()
+
+    fun isValidEmail(emailStr: String): Boolean {
+        return android.util.Patterns.EMAIL_ADDRESS.matcher(emailStr.trim()).matches()
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Add Admin",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = { if (!isLoading) onBack() }) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFFFF6B35)
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFFF5F5F5))
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Header Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("👑", fontSize = 48.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Promote User to Admin",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFF6B35)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Enter the user's email and UID to grant admin privileges",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+
+            // Form Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Email Field
+                    Column {
+                        Text(
+                            text = "Email Address",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = email,
+                            onValueChange = {
+                                email = it
+                                errorMessage = ""
+                            },
+                            placeholder = { Text("Enter user's email") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            enabled = !isLoading,
+                            shape = RoundedCornerShape(8.dp),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFFFF6B35),
+                                focusedLabelColor = Color(0xFFFF6B35)
+                            )
+                        )
+                    }
+
+                    // UID Field
+                    Column {
+                        Text(
+                            text = "User UID",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = uid,
+                            onValueChange = {
+                                uid = it
+                                errorMessage = ""
+                            },
+                            placeholder = { Text("Enter user's UID") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            enabled = !isLoading,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFFFF6B35),
+                                focusedLabelColor = Color(0xFFFF6B35)
+                            )
+                        )
+                    }
+
+                    // Error Message
+                    if (errorMessage.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFFFEBEE),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("⚠️", fontSize = 20.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = errorMessage,
+                                    color = Color(0xFFD32F2F),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Promote Button - Green
+            Button(
+                onClick = {
+                    when {
+                        email.isBlank() -> {
+                            errorMessage = "Please enter an email address"
+                        }
+                        !isValidEmail(email) -> {
+                            errorMessage = "Invalid email format"
+                        }
+                        uid.isBlank() -> {
+                            errorMessage = "Please enter the user's UID"
+                        }
+                        uid.trim().length < 20 -> {
+                            errorMessage = "UID is invalid"
+                        }
+                        else -> {
+                            isLoading = true
+                            errorMessage = ""
+
+                            val emailToSave = email.trim().lowercase()
+                            val uidToSave = uid.trim()
+
+                            // Step 1: Try to find user by UID first, then by email
+                            firestore.collection("users")
+                                .document(uidToSave)
+                                .get()
+                                .addOnSuccessListener { userDoc ->
+                                    if (userDoc.exists()) {
+                                        // Found by UID document ID
+                                        val storedEmail = userDoc.getString("email")?.lowercase() ?: ""
+
+                                        if (storedEmail != emailToSave) {
+                                            isLoading = false
+                                            errorMessage = "Email does not match this UID"
+                                        } else {
+                                            // Check if already admin (using EMAIL as document ID)
+                                            firestore.collection("admins")
+                                                .document(emailToSave)  // ✅ Use EMAIL as document ID
+                                                .get()
+                                                .addOnSuccessListener { adminDoc ->
+                                                    if (adminDoc.exists()) {
+                                                        isLoading = false
+                                                        errorMessage = "This user is already an admin"
+                                                    } else {
+                                                        // Promote to admin (using EMAIL as document ID)
+                                                        val displayName = userDoc.getString("displayName") ?: ""
+
+                                                        val adminData = hashMapOf(
+                                                            "email" to emailToSave,
+                                                            "uid" to uidToSave,
+                                                            "displayName" to displayName,
+                                                            "isAdmin" to true,
+                                                            "promotedAt" to com.google.firebase.Timestamp.now(),
+                                                            "promotedBy" to (auth.currentUser?.email ?: "Unknown")
+                                                        )
+
+                                                        firestore.collection("admins")
+                                                            .document(emailToSave)  // ✅ Use EMAIL as document ID
+                                                            .set(adminData)
+                                                            .addOnSuccessListener {
+                                                                isLoading = false
+                                                                onSuccess(emailToSave)
+                                                            }
+                                                            .addOnFailureListener { e: Exception ->
+                                                                isLoading = false
+                                                                errorMessage = "Failed to promote: ${e.message}"
+                                                            }
+                                                    }
+                                                }
+                                                .addOnFailureListener { e: Exception ->
+                                                    isLoading = false
+                                                    errorMessage = "Error checking admin status: ${e.message}"
+                                                }
+                                        }
+                                    } else {
+                                        // User document not found by UID, try querying by email
+                                        firestore.collection("users")
+                                            .whereEqualTo("email", emailToSave)
+                                            .get()
+                                            .addOnSuccessListener { querySnapshot ->
+                                                if (querySnapshot.isEmpty) {
+                                                    isLoading = false
+                                                    errorMessage = "User does not exist in the system"
+                                                } else {
+                                                    val userDocFromQuery = querySnapshot.documents.first()
+                                                    val userUidFromDoc = userDocFromQuery.getString("uid") ?: userDocFromQuery.id
+
+                                                    if (userUidFromDoc != uidToSave) {
+                                                        isLoading = false
+                                                        errorMessage = "UID does not match. Found UID: $userUidFromDoc"
+                                                    } else {
+                                                        // Check if already admin (using EMAIL as document ID)
+                                                        firestore.collection("admins")
+                                                            .document(emailToSave)  // ✅ Use EMAIL as document ID
+                                                            .get()
+                                                            .addOnSuccessListener { adminDoc ->
+                                                                if (adminDoc.exists()) {
+                                                                    isLoading = false
+                                                                    errorMessage = "This user is already an admin"
+                                                                } else {
+                                                                    val displayName = userDocFromQuery.getString("displayName") ?: ""
+
+                                                                    val adminData = hashMapOf(
+                                                                        "email" to emailToSave,
+                                                                        "uid" to uidToSave,
+                                                                        "displayName" to displayName,
+                                                                        "isAdmin" to true,
+                                                                        "promotedAt" to com.google.firebase.Timestamp.now(),
+                                                                        "promotedBy" to (auth.currentUser?.email ?: "Unknown")
+                                                                    )
+
+                                                                    firestore.collection("admins")
+                                                                        .document(emailToSave)  // ✅ Use EMAIL as document ID
+                                                                        .set(adminData)
+                                                                        .addOnSuccessListener {
+                                                                            isLoading = false
+                                                                            onSuccess(emailToSave)
+                                                                        }
+                                                                        .addOnFailureListener { e: Exception ->
+                                                                            isLoading = false
+                                                                            errorMessage = "Failed to promote: ${e.message}"
+                                                                        }
+                                                                }
+                                                            }
+                                                            .addOnFailureListener { e: Exception ->
+                                                                isLoading = false
+                                                                errorMessage = "Error: ${e.message}"
+                                                            }
+                                                    }
+                                                }
+                                            }
+                                            .addOnFailureListener { e: Exception ->
+                                                isLoading = false
+                                                errorMessage = "Error searching for user: ${e.message}"
+                                            }
+                                    }
+                                }
+                                .addOnFailureListener { e: Exception ->
+                                    isLoading = false
+                                    errorMessage = "Error checking user: ${e.message}"
+                                }
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = !isLoading && email.isNotBlank() && uid.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF4CAF50)
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text(
+                        text = "Promote as Admin",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Cancel Button
+            OutlinedButton(
+                onClick = { if (!isLoading) onBack() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = !isLoading,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+            ) {
+                Text(
+                    text = "Cancel",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.Gray
+                )
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RemoveAdminScreen(
+    onBack: () -> Unit,
+    onSuccess: (String) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var selectedAdmin by remember { mutableStateOf<Map<String, Any>?>(null) }
+    var uid by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    var isLoadingAdmins by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf("") }
+    var adminsList by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
+    var showUidDialog by remember { mutableStateOf(false) }
+
+    val firestore = Firebase.firestore
+
+    // Function to load admins
+    fun loadAdmins() {
+        isLoadingAdmins = true
+        firestore.collection("admins")
+            .orderBy("email")
+            .get()
+            .addOnSuccessListener { documents ->
+                val admins = documents.documents.mapNotNull { doc ->
+                    val email = doc.getString("email") ?: doc.id  // Use doc.id as fallback (which is the email)
+                    val displayName = doc.getString("displayName") ?: ""
+                    val uidValue = doc.getString("uid") ?: ""
+                    mapOf(
+                        "email" to email,
+                        "displayName" to displayName,
+                        "uid" to uidValue,
+                        "docId" to doc.id  // ✅ Document ID is the email
+                    )
+                }
+                adminsList = admins
+                isLoadingAdmins = false
+            }
+            .addOnFailureListener { e ->
+                isLoadingAdmins = false
+                errorMessage = "Failed to load admins: ${e.message}"
+            }
+    }
+
+    // Load admins on screen launch
+    LaunchedEffect(Unit) {
+        loadAdmins()
+    }
+
+    // UID Confirmation Dialog
+    if (showUidDialog && selectedAdmin != null) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isLoading) {
+                    showUidDialog = false
+                    uid = ""
+                    errorMessage = ""
+                }
+            },
+            title = {
+                Text(
+                    text = "Remove Admin",
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFEF5350)
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFEBEE),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp)
+                        ) {
+                            Text(
+                                text = "You are about to remove:",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFD32F2F)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = selectedAdmin!!["email"] as String,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD32F2F)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Display Name: ${selectedAdmin!!["displayName"] as String}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFD32F2F)
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = uid,
+                        onValueChange = {
+                            uid = it
+                            errorMessage = ""
+                        },
+                        label = { Text("Enter UID to Confirm") },
+                        placeholder = { Text("Enter user's UID") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        enabled = !isLoading,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFEF5350),
+                            focusedLabelColor = Color(0xFFEF5350)
+                        )
+                    )
+
+                    if (errorMessage.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFFFEBEE),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("⚠️", fontSize = 20.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = errorMessage,
+                                    color = Color(0xFFD32F2F),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val enteredUid = uid.trim()
+                        val actualAdminUid = selectedAdmin!!["uid"] as String
+                        val docId = selectedAdmin!!["docId"] as String  // ✅ This is the email
+
+                        when {
+                            enteredUid.isEmpty() -> {
+                                errorMessage = "Please enter the UID"
+                            }
+                            enteredUid != actualAdminUid -> {
+                                errorMessage = "UID does not match. Expected: $actualAdminUid"
+                            }
+                            adminsList.size <= 1 -> {
+                                errorMessage = "Cannot remove the last admin"
+                            }
+                            else -> {
+                                isLoading = true
+                                errorMessage = ""
+
+                                val adminEmail = selectedAdmin!!["email"] as String
+
+                                // ✅ Delete using EMAIL as document ID
+                                firestore.collection("admins")
+                                    .document(docId)  // docId is the email
+                                    .delete()
+                                    .addOnSuccessListener {
+                                        isLoading = false
+                                        showUidDialog = false
+                                        uid = ""
+                                        selectedAdmin = null
+
+                                        // Reload the admins list to reflect changes
+                                        loadAdmins()
+
+                                        // Show success message
+                                        onSuccess(adminEmail)
+                                    }
+                                    .addOnFailureListener { e ->
+                                        isLoading = false
+                                        errorMessage = "Failed to remove admin: ${e.message}"
+                                    }
+                            }
+                        }
+                    },
+                    enabled = !isLoading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFEF5350)
+                    )
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Remove Admin")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showUidDialog = false
+                        uid = ""
+                        errorMessage = ""
+                        selectedAdmin = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color.White
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Remove Admin",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = { if (!isLoading) onBack() }) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFFEF5350)
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFFF5F5F5))
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Header Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("❌", fontSize = 48.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Remove Admin Privileges",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFEF5350)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (isLoadingAdmins) {
+                            "Loading admins..."
+                        } else {
+                            "Select an admin to remove (${adminsList.size} admin${if (adminsList.size != 1) "s" else ""})"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+
+            // Admin List
+            if (isLoadingAdmins) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = Color(0xFFEF5350))
+                }
+            } else if (adminsList.isEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("🔍", fontSize = 48.sp)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "No admins found",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(adminsList) { admin ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color.White
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Surface(
+                                onClick = {
+                                    selectedAdmin = admin
+                                    showUidDialog = true
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color.Transparent
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFFFCDD2)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        val initials = (admin["displayName"] as String)
+                                            .split(" ")
+                                            .mapNotNull { it.firstOrNull()?.toString() }
+                                            .take(2)
+                                            .joinToString("")
+                                            .uppercase()
+                                            .ifEmpty { "A" }
+                                        Text(
+                                            text = initials,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = Color(0xFFD32F2F),
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = admin["displayName"] as String,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = admin["email"] as String,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowRight,
+                                        contentDescription = "Select",
+                                        tint = Color(0xFFEF5350)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Cancel Button
+            OutlinedButton(
+                onClick = { if (!isLoading) onBack() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = !isLoading,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+            ) {
+                Text(
+                    text = "Cancel",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.Gray
+                )
+            }
         }
     }
 }

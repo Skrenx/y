@@ -11,6 +11,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 data class HydrantUiState(
     val hydrants: List<FireHydrant> = emptyList(),
@@ -31,13 +35,52 @@ class FireHydrantViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(HydrantUiState())
     val uiState: StateFlow<HydrantUiState> = _uiState.asStateFlow()
 
+    /**
+     * Helper function to extract numeric ID from hydrant ID string.
+     * Handles formats like "Id_1", "Id_01", "Id_001", etc.
+     */
+    private fun extractHydrantNumber(hydrantId: String): Int {
+        return try {
+            val numberPart = hydrantId
+                .replace("Id_", "", ignoreCase = true)
+                .replace("Hydrant Id_", "", ignoreCase = true)
+                .trim()
+            numberPart.toIntOrNull() ?: Int.MAX_VALUE
+        } catch (e: Exception) {
+            Int.MAX_VALUE
+        }
+    }
+
+    /**
+     * Generates a zero-padded ID like Id_01, Id_02, ... Id_10, Id_99, Id_100
+     * Uses 2 digits for 1-99, 3 digits for 100-999, etc.
+     */
+    private fun generateZeroPaddedId(number: Int): String {
+        return when {
+            number < 100 -> "Id_${number.toString().padStart(2, '0')}"  // Id_01 to Id_99
+            number < 1000 -> "Id_${number.toString().padStart(3, '0')}" // Id_100 to Id_999
+            else -> "Id_${number.toString().padStart(4, '0')}"          // Id_1000+
+        }
+    }
+
+    /**
+     * Generates a formatted timestamp string like "January 10, 2026 at 3:33:09 PM UTC+8"
+     */
+    private fun getFormattedTimestamp(): String {
+        val dateFormat = SimpleDateFormat("MMMM dd, yyyy 'at' h:mm:ss a 'UTC+8'", Locale.ENGLISH)
+        dateFormat.timeZone = TimeZone.getTimeZone("Asia/Manila") // UTC+8
+        return dateFormat.format(Date())
+    }
+
     fun loadHydrants(municipality: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
 
             repository.getHydrantsByMunicipality(municipality).collect { hydrants ->
+                // Repository already sorts numerically, but we can sort again for safety
+                val sortedHydrants = hydrants.sortedBy { extractHydrantNumber(it.id) }
                 _uiState.value = _uiState.value.copy(
-                    hydrants = hydrants,
+                    hydrants = sortedHydrants,
                     isLoading = false
                 )
             }
@@ -93,8 +136,16 @@ class FireHydrantViewModel : ViewModel() {
                     }
                 }
 
+                // Sort all hydrants by municipality first, then by numeric ID
+                val sortedAllHydrants = allHydrants.sortedWith(
+                    compareBy(
+                        { it.municipality },
+                        { extractHydrantNumber(it.id) }
+                    )
+                )
+
                 _uiState.value = _uiState.value.copy(
-                    allHydrants = allHydrants,
+                    allHydrants = sortedAllHydrants,
                     isLoading = false,
                     error = null
                 )
@@ -130,7 +181,7 @@ class FireHydrantViewModel : ViewModel() {
                 serviceStatus = serviceStatus,
                 remarks = remarks,
                 municipality = municipality,
-                timestamp = System.currentTimeMillis()
+                lastUpdated = "" // Will be set in repository
             )
 
             val result = repository.addFireHydrant(hydrant)
@@ -212,10 +263,11 @@ class FireHydrantViewModel : ViewModel() {
                 val hydrantsRef = database.getReference("fire_hydrants")
                     .child(municipality)
 
-                val idWithoutPrefix = hydrantId.removePrefix("Id_")
-                val deletedIdNumber: Int? = idWithoutPrefix.toIntOrNull()
+                // Extract the number from the ID (handles both Id_1 and Id_01 formats)
+                val deletedIdNumber = extractHydrantNumber(hydrantId)
 
-                if (deletedIdNumber == null) {
+                if (deletedIdNumber == Int.MAX_VALUE || deletedIdNumber == 0) {
+                    // Invalid ID format, just delete without renumbering
                     hydrantsRef.child(hydrantId).removeValue().await()
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -227,8 +279,10 @@ class FireHydrantViewModel : ViewModel() {
                     return@launch
                 }
 
+                // Delete the hydrant
                 hydrantsRef.child(hydrantId).removeValue().await()
 
+                // Get all remaining hydrants
                 val snapshot = hydrantsRef.get().await()
 
                 val hydrantsToRenumber = ArrayList<Triple<String, Int, DataSnapshot>>()
@@ -236,26 +290,30 @@ class FireHydrantViewModel : ViewModel() {
                 if (snapshot.exists()) {
                     for (childSnapshot in snapshot.children) {
                         val docId = childSnapshot.key ?: continue
-                        val idNumStr = docId.removePrefix("Id_")
-                        val idNumber = idNumStr.toIntOrNull()
-                        if (idNumber != null && idNumber > deletedIdNumber) {
+                        val idNumber = extractHydrantNumber(docId)
+                        if (idNumber != Int.MAX_VALUE && idNumber > deletedIdNumber) {
                             hydrantsToRenumber.add(Triple(docId, idNumber, childSnapshot))
                         }
                     }
                 }
 
+                // Sort by numeric ID to ensure proper renumbering order
                 hydrantsToRenumber.sortBy { it.second }
 
+                // Renumber hydrants with zero-padded IDs
                 for (triple in hydrantsToRenumber) {
                     val oldId = triple.first
                     val oldIdNumber = triple.second
                     val childSnapshot = triple.third
 
                     val newIdNumber = oldIdNumber - 1
-                    val newId = "Id_$newIdNumber"
+                    val newId = generateZeroPaddedId(newIdNumber)
 
                     // Auto-generate new hydrant name based on new ID
-                    val newHydrantName = "Hydrant Id_$newIdNumber"
+                    val newHydrantName = "Hydrant $newId"
+
+                    // Get formatted timestamp for the update
+                    val formattedTimestamp = getFormattedTimestamp()
 
                     val data = childSnapshot.value
 
@@ -267,9 +325,12 @@ class FireHydrantViewModel : ViewModel() {
                             }
                         }
                         updatedData["id"] = newId
-                        updatedData["hydrantName"] = newHydrantName // Update hydrant name too
+                        updatedData["hydrantName"] = newHydrantName
+                        updatedData["lastUpdated"] = formattedTimestamp
 
+                        // Create new entry with zero-padded ID
                         hydrantsRef.child(newId).setValue(updatedData).await()
+                        // Delete old entry
                         hydrantsRef.child(oldId).removeValue().await()
                     }
                 }
