@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- res/drawable/ic_notification.xml -->
+<!-- Notification icon for FireGrid app -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    
+    <!-- Fire hydrant icon shape -->
+    <path
+        android:fillColor="#FF6B35"
+        android:pathData="M12,2C10.9,2 10,2.9 10,4V5H8V4C8,2.9 7.1,2 6,2C4.9,2 4,2.9 4,4V8C4,9.1 4.9,10 6,10H8V12H6C4.9,12 4,12.9 4,14V18C4,19.1 4.9,20 6,20H8V22H10V20H14V22H16V20H18C19.1,20 20,19.1 20,18V14C20,12.9 19.1,12 18,12H16V10H18C19.1,10 20,9.1 20,8V4C20,2.9 19.1,2 18,2C16.9,2 16,2.9 16,4V5H14V4C14,2.9 13.1,2 12,2M10,7H14V12H10V7M6,14H18V18H6V14Z"/>
+    
+</vector>

@@ -96,6 +96,26 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import com.example.hydrant.model.FireHydrant
+import android.graphics.pdf.PdfDocument
+import android.graphics.Paint
+import android.graphics.Typeface
+import java.io.File
+import java.io.FileOutputStream
+import androidx.core.content.FileProvider
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
+import android.app.PendingIntent
+import android.media.RingtoneManager
+import android.content.Context
 
 // Weather Data Classes
 data class WeatherResponse(
@@ -389,6 +409,145 @@ fun decodePolyline(encoded: String): List<LatLng> {
     return poly
 }
 
+// Add this AFTER the decodePolyline function (around line 350)
+
+fun logHydrantChange(
+    context: Context,
+    changeType: String, // "added", "updated", "deleted"
+    hydrantId: String,
+    hydrantName: String = "",
+    newStatus: String = "",
+    municipality: String,
+    performedBy: String
+) {
+    val firestore = Firebase.firestore
+
+    val changeData = hashMapOf(
+        "changeType" to changeType,
+        "hydrantId" to hydrantId,
+        "hydrantName" to hydrantName,
+        "newStatus" to newStatus,
+        "municipality" to municipality,
+        "performedBy" to performedBy,
+        "timestamp" to com.google.firebase.Timestamp.now(),
+        "notified" to false
+    )
+
+    firestore.collection("hydrant_changes")
+        .add(changeData)
+        .addOnSuccessListener { documentReference ->
+            android.util.Log.d("HydrantChange", "Change logged: ${documentReference.id}")
+        }
+        .addOnFailureListener { e ->
+            android.util.Log.e("HydrantChange", "Error logging change", e)
+        }
+}
+
+fun submitFireIncidentReport(
+    context: Context,
+    reporterName: String,
+    reporterContact: String,
+    reporterEmail: String,
+    reporterCurrentLocation: String,
+    incidentLocation: String,
+    description: String,
+    onSuccess: () -> Unit,
+    onFailure: (String) -> Unit
+) {
+    val firestore = Firebase.firestore
+
+    val reportData = hashMapOf(
+        "reporterName" to reporterName,
+        "reporterContact" to reporterContact,
+        "reporterEmail" to reporterEmail,
+        "reporterCurrentLocation" to reporterCurrentLocation,
+        "incidentLocation" to incidentLocation,
+        "description" to description,
+        "timestamp" to com.google.firebase.Timestamp.now(),
+        "status" to "pending", // pending, acknowledged, resolved
+        "notified" to false
+    )
+
+    firestore.collection("fire_incident_reports")
+        .add(reportData)
+        .addOnSuccessListener { documentReference ->
+            android.util.Log.d("FireIncident", "Report submitted: ${documentReference.id}")
+            onSuccess()
+        }
+        .addOnFailureListener { e ->
+            android.util.Log.e("FireIncident", "Error submitting report", e)
+            onFailure(e.message ?: "Unknown error")
+        }
+}
+
+/**
+ * Show fire incident notification to admins
+ */
+fun showFireIncidentNotification(
+    context: Context,
+    reporterName: String,
+    incidentLocation: String,
+    description: String
+) {
+    // Check permission first (Android 13+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+    }
+
+    // Check if notifications are enabled
+    val prefs = context.getSharedPreferences("firegrid_prefs", Context.MODE_PRIVATE)
+    val notificationsEnabled = prefs.getBoolean("notifications_enabled", true)
+    val emergencyEnabled = prefs.getBoolean("emergency_enabled", true)
+
+    if (!notificationsEnabled || !emergencyEnabled) {
+        return
+    }
+
+    val title = "🔥 FIRE INCIDENT REPORTED!"
+    val message = "Reporter: $reporterName\nLocation: $incidentLocation"
+
+    val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+    }
+
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+    val notification = NotificationCompat.Builder(context, "emergency_channel")
+        .setSmallIcon(android.R.drawable.ic_dialog_alert)
+        .setContentTitle(title)
+        .setContentText(message)
+        .setStyle(NotificationCompat.BigTextStyle()
+            .bigText("$message\n\nDescription: ${description.take(100)}${if (description.length > 100) "..." else ""}"))
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setSound(soundUri)
+        .setVibrate(longArrayOf(0, 500, 200, 500, 200, 500))
+        .setColor(0xFFD32F2F.toInt())
+        .build()
+
+    with(NotificationManagerCompat.from(context)) {
+        try {
+            notify(System.currentTimeMillis().toInt(), notification)
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+        }
+    }
+}
+
 fun extractHydrantNumber(hydrantId: String): Int {
     return try {
         val numberPart = hydrantId
@@ -419,6 +578,9 @@ class MainActivity : ComponentActivity() {
         // Start the logout service
         startService(Intent(this, LogoutService::class.java))
 
+        // ✅ ADD THIS LINE: Start the hydrant change listener service
+        startService(Intent(this, HydrantChangeListenerService::class.java))
+
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
@@ -428,6 +590,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+
 
 @PreviewScreenSizes
 @Composable
@@ -1432,6 +1596,33 @@ fun FireHydrantListScreen(
     var selectedFilter by rememberSaveable { mutableStateOf("All") }
     var isSearchActive by rememberSaveable { mutableStateOf(false) }
 
+    // ✅ ADD THESE LINES - Check if user is admin
+    val auth = FirebaseAuth.getInstance()
+    val userEmail = auth.currentUser?.email ?: ""
+    val firestore = Firebase.firestore
+    var isAdmin by remember { mutableStateOf(false) }
+    var isCheckingAdmin by remember { mutableStateOf(true) }
+
+    // ✅ ADD THIS LaunchedEffect - Check admin status
+    LaunchedEffect(userEmail) {
+        if (userEmail.isNotEmpty()) {
+            firestore.collection("admins")
+                .document(userEmail.lowercase())
+                .get()
+                .addOnSuccessListener { document ->
+                    isAdmin = document.exists()
+                    isCheckingAdmin = false
+                }
+                .addOnFailureListener {
+                    isAdmin = false
+                    isCheckingAdmin = false
+                }
+        } else {
+            isAdmin = false
+            isCheckingAdmin = false
+        }
+    }
+
     LaunchedEffect(municipalityName) {
         hydrantViewModel.loadHydrants(municipalityName)
     }
@@ -1861,7 +2052,9 @@ fun FireHydrantListScreen(
                             hydrant = hydrant,
                             onEditClick = { onEditHydrant(hydrant) },
                             onViewLocationClick = { onViewLocation(hydrant) },
-                            showInvalidWarning = hasInvalidCoordinates(hydrant)
+                            showInvalidWarning = hasInvalidCoordinates(hydrant),
+                            isAdmin = isAdmin,  // ✅ ADD THIS LINE
+                            isCheckingAdmin = isCheckingAdmin  // ✅ ADD THIS LINE
                         )
                     }
 
@@ -1879,7 +2072,9 @@ fun FireHydrantCard(
     hydrant: FireHydrant,
     onEditClick: () -> Unit,
     onViewLocationClick: () -> Unit,
-    showInvalidWarning: Boolean = false
+    showInvalidWarning: Boolean = false,
+    isAdmin: Boolean = false,
+    isCheckingAdmin: Boolean = false
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1896,6 +2091,7 @@ fun FireHydrantCard(
                 .padding(16.dp)
         ) {
             // Invalid coordinates warning banner at top of card
+            // ✅ UPDATED: Different message for admin vs regular user
             if (showInvalidWarning) {
                 Surface(
                     modifier = Modifier
@@ -1915,7 +2111,11 @@ fun FireHydrantCard(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Invalid coordinates - Please update",
+                            text = if (!isCheckingAdmin && isAdmin) {
+                                "Invalid coordinates - Please update"  // ✅ Admin message
+                            } else {
+                                "Invalid coordinates"  // ✅ Regular user message
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFFE65100)
@@ -2084,47 +2284,51 @@ fun FireHydrantCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Fix Coordinates / Edit Info Button - Single line
-                if (showInvalidWarning) {
-                    Button(
-                        onClick = onEditClick,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFF9800)
-                        ),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Text(
-                            text = "Fix Coordinates",
-                            color = Color.White,
-                            maxLines = 1,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                } else {
-                    OutlinedButton(
-                        onClick = onEditClick,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color(0xFF757575)
-                        ),
-                        border = BorderStroke(1.dp, Color(0xFFE0E0E0)),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Text(
-                            text = "Edit Info",
-                            maxLines = 1
-                        )
+                // ✅ Only show Edit/Fix buttons for admins
+                if (!isCheckingAdmin && isAdmin) {
+                    // Fix Coordinates / Edit Info Button - Single line
+                    if (showInvalidWarning) {
+                        Button(
+                            onClick = onEditClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFF9800)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text(
+                                text = "Fix Coordinates",
+                                color = Color.White,
+                                maxLines = 1,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = onEditClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color(0xFF757575)
+                            ),
+                            border = BorderStroke(1.dp, Color(0xFFE0E0E0)),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text(
+                                text = "Edit Info",
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
-                // View Location Button - Single line
+                // View Location Button - Single line (always visible to everyone)
+                // ✅ THIS SHOULD ONLY APPEAR ONCE - NOT TWICE!
                 OutlinedButton(
                     onClick = onViewLocationClick,
                     modifier = Modifier
@@ -2197,6 +2401,7 @@ fun EditFireHydrantScreen(
     onSuccess: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val hydrantViewModel: FireHydrantViewModel = viewModel()
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -2228,6 +2433,18 @@ fun EditFireHydrantScreen(
     // Handle update success
     LaunchedEffect(hydrantUiState.updateSuccess) {
         if (hydrantUiState.updateSuccess) {
+            // ✅ Log the change to Firestore instead of showing notification directly
+            val currentUserEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown"
+            logHydrantChange(
+                context = context,
+                changeType = "updated",
+                hydrantId = hydrant.id,
+                hydrantName = hydrant.hydrantName,
+                newStatus = serviceStatus,
+                municipality = hydrant.municipality,
+                performedBy = currentUserEmail
+            )
+
             snackbarHostState.showSnackbar("Fire hydrant updated successfully!")
             hydrantViewModel.resetUpdateSuccess()
             onSuccess()
@@ -2237,6 +2454,17 @@ fun EditFireHydrantScreen(
     // Handle delete success
     LaunchedEffect(hydrantUiState.deleteSuccess) {
         if (hydrantUiState.deleteSuccess) {
+            // ✅ Log the deletion to Firestore
+            val currentUserEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown"
+            logHydrantChange(
+                context = context,
+                changeType = "deleted",
+                hydrantId = hydrant.id,
+                hydrantName = hydrant.hydrantName,
+                municipality = hydrant.municipality,
+                performedBy = currentUserEmail
+            )
+
             snackbarHostState.showSnackbar("Fire hydrant deleted successfully!")
             hydrantViewModel.resetDeleteSuccess()
             onDelete()
@@ -2630,6 +2858,7 @@ fun AddFireHydrantScreen(
     onBack: () -> Unit,
     onSuccess: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val hydrantViewModel: FireHydrantViewModel = viewModel()
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -2647,6 +2876,16 @@ fun AddFireHydrantScreen(
 
     LaunchedEffect(hydrantUiState.addSuccess) {
         if (hydrantUiState.addSuccess) {
+            // ✅ Log the addition to Firestore
+            val currentUserEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown"
+            logHydrantChange(
+                context = context,
+                changeType = "added",
+                hydrantId = "",
+                municipality = municipalityName,
+                performedBy = currentUserEmail
+            )
+
             snackbarHostState.showSnackbar("Fire hydrant added successfully!")
             hydrantViewModel.resetAddSuccess()
             onSuccess()
@@ -2918,6 +3157,204 @@ fun AddFireHydrantScreen(
     }
 }
 
+fun showHydrantUpdateNotification(
+    context: Context,
+    hydrantId: String,
+    hydrantName: String,
+    newStatus: String,
+    municipality: String
+) {
+    // Check permission first (Android 13+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+    }
+
+    // Check if hydrant notifications are enabled
+    val prefs = context.getSharedPreferences("firegrid_prefs", Context.MODE_PRIVATE)
+    val notificationsEnabled = prefs.getBoolean("notifications_enabled", true)
+    val hydrantUpdatesEnabled = prefs.getBoolean("hydrant_updates_enabled", true)
+
+    if (!notificationsEnabled || !hydrantUpdatesEnabled) {
+        return
+    }
+
+    // Create notification content
+    val statusEmoji = if (newStatus == "In Service") "✅" else "❌"
+    val title = "$statusEmoji Hydrant Updated"
+    val message = "Hydrant $hydrantId ($hydrantName) in $municipality is now $newStatus"
+
+    val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+    }
+
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+    val notification = NotificationCompat.Builder(context, "hydrant_updates_channel")
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle(title)
+        .setContentText(message)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setSound(soundUri)
+        .setVibrate(longArrayOf(0, 250, 250, 250))
+        .setColor(0xFF4CAF50.toInt())
+        .build()
+
+    with(NotificationManagerCompat.from(context)) {
+        try {
+            notify(System.currentTimeMillis().toInt(), notification)
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+        }
+    }
+}
+
+/**
+ * Show notification when a new hydrant is added (for admins)
+ */
+fun showHydrantAddedNotification(
+    context: Context,
+    municipality: String
+) {
+    // Check permission first (Android 13+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+    }
+
+    // Check if hydrant notifications are enabled
+    val prefs = context.getSharedPreferences("firegrid_prefs", Context.MODE_PRIVATE)
+    val notificationsEnabled = prefs.getBoolean("notifications_enabled", true)
+    val hydrantUpdatesEnabled = prefs.getBoolean("hydrant_updates_enabled", true)
+
+    if (!notificationsEnabled || !hydrantUpdatesEnabled) {
+        return
+    }
+
+    val title = "🆕 New Hydrant Added"
+    val message = "A new fire hydrant has been added in $municipality"
+
+    val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+    }
+
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+    val notification = NotificationCompat.Builder(context, "hydrant_updates_channel")
+        .setSmallIcon(android.R.drawable.ic_input_add)
+        .setContentTitle(title)
+        .setContentText(message)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setSound(soundUri)
+        .setVibrate(longArrayOf(0, 250, 250, 250))
+        .setColor(0xFF2196F3.toInt())
+        .build()
+
+    with(NotificationManagerCompat.from(context)) {
+        try {
+            notify(System.currentTimeMillis().toInt(), notification)
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+        }
+    }
+}
+
+/**
+ * Show notification when a hydrant is deleted (for admins)
+ */
+fun showHydrantDeletedNotification(
+    context: Context,
+    hydrantId: String,
+    municipality: String
+) {
+    // Check permission first (Android 13+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+    }
+
+    // Check if hydrant notifications are enabled
+    val prefs = context.getSharedPreferences("firegrid_prefs", Context.MODE_PRIVATE)
+    val notificationsEnabled = prefs.getBoolean("notifications_enabled", true)
+    val hydrantUpdatesEnabled = prefs.getBoolean("hydrant_updates_enabled", true)
+
+    if (!notificationsEnabled || !hydrantUpdatesEnabled) {
+        return
+    }
+
+    val title = "🗑️ Hydrant Deleted"
+    val message = "Hydrant $hydrantId in $municipality has been removed"
+
+    val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+    }
+
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+    val notification = NotificationCompat.Builder(context, "hydrant_updates_channel")
+        .setSmallIcon(android.R.drawable.ic_delete)
+        .setContentTitle(title)
+        .setContentText(message)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setSound(soundUri)
+        .setVibrate(longArrayOf(0, 250, 250, 250))
+        .setColor(0xFFEF5350.toInt())
+        .build()
+
+    with(NotificationManagerCompat.from(context)) {
+        try {
+            notify(System.currentTimeMillis().toInt(), notification)
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MunicipalityDetailScreen(
@@ -2928,14 +3365,94 @@ fun MunicipalityDetailScreen(
     onShowHydrantMap: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val auth = FirebaseAuth.getInstance()
+    val userEmail = auth.currentUser?.email ?: ""
+    val firestore = Firebase.firestore
+
     var weatherData by remember { mutableStateOf<DailyWeather?>(null) }
     var isWeatherLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isGeneratingReport by remember { mutableStateOf(false) }
+    var isAdmin by remember { mutableStateOf(false) }
+    var isCheckingAdmin by remember { mutableStateOf(true) }
+
+    // Dialog states for success/error
+    var showSuccessDialog by remember { mutableStateOf(false) }
+    var showErrorDialog by remember { mutableStateOf(false) }
+    var dialogMessage by remember { mutableStateOf("") }
+
     val scope = rememberCoroutineScope()
 
     val hydrantViewModel: FireHydrantViewModel = viewModel()
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
+
+    // Success Dialog
+    if (showSuccessDialog) {
+        AlertDialog(
+            onDismissRequest = { showSuccessDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("✅", fontSize = 24.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Success!", fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+                }
+            },
+            text = { Text(dialogMessage) },
+            confirmButton = {
+                Button(
+                    onClick = { showSuccessDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                ) {
+                    Text("OK")
+                }
+            },
+            containerColor = Color.White
+        )
+    }
+
+    // Error Dialog
+    if (showErrorDialog) {
+        AlertDialog(
+            onDismissRequest = { showErrorDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("❌", fontSize = 24.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Error", fontWeight = FontWeight.Bold, color = Color(0xFFEF5350))
+                }
+            },
+            text = { Text(dialogMessage) },
+            confirmButton = {
+                Button(
+                    onClick = { showErrorDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350))
+                ) {
+                    Text("OK")
+                }
+            },
+            containerColor = Color.White
+        )
+    }
+
+    // Check if user is admin
+    LaunchedEffect(userEmail) {
+        if (userEmail.isNotEmpty()) {
+            firestore.collection("admins")
+                .document(userEmail.lowercase())
+                .get()
+                .addOnSuccessListener { document ->
+                    isAdmin = document.exists()
+                    isCheckingAdmin = false
+                }
+                .addOnFailureListener {
+                    isAdmin = false
+                    isCheckingAdmin = false
+                }
+        } else {
+            isAdmin = false
+            isCheckingAdmin = false
+        }
+    }
 
     LaunchedEffect(municipalityName) {
         isWeatherLoading = true
@@ -2986,131 +3503,269 @@ fun MunicipalityDetailScreen(
         return "%d° %02d' %.2f\" %s".format(degrees, minutes, seconds, direction)
     }
 
-    // Function to generate CSV/Table report
-    fun generateReport() {
+    // =====================================================
+    // AUTOMATIC PDF GENERATION AND EMAIL SENDING
+    // =====================================================
+    fun generateAndSendPdfReport() {
         isGeneratingReport = true
         scope.launch {
             try {
                 val hydrants = hydrantUiState.hydrants
 
                 if (hydrants.isEmpty()) {
-                    android.widget.Toast.makeText(
-                        context,
-                        "No hydrants to generate report",
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
-                    isGeneratingReport = false
+                    withContext(Dispatchers.Main) {
+                        dialogMessage = "No hydrants to generate report"
+                        showErrorDialog = true
+                        isGeneratingReport = false
+                    }
                     return@launch
                 }
 
-                // Create CSV content matching BFP format
-                val csvBuilder = StringBuilder()
-
-                // Header row
-                csvBuilder.appendLine("STATION/OWNED BY,NUMBER OF FIRE HYDRANT,EXACT LOCATION/ADDRESS,LATITUDE,LONGITUDE,TYPE/COLOR,OPERATIONAL,NON-OPERATIONAL,REMARKS")
-
-                // Data rows
-                hydrants.forEachIndexed { index, hydrant ->
+                withContext(Dispatchers.IO) {
                     val stationName = "$municipalityName FS"
-                    val hydrantNumber = index + 1
 
-                    // Convert coordinates to DMS format if valid
-                    val lat = hydrant.latitude.toDoubleOrNull()
-                    val lng = hydrant.longitude.toDoubleOrNull()
+                    // Page dimensions (A4 Landscape)
+                    val pageWidth = 842
+                    val pageHeight = 595
 
-                    val latitudeDMS = if (lat != null && lat != 0.0) {
-                        decimalToDMS(lat, true)
-                    } else {
-                        hydrant.latitude
+                    val pdfDocument = android.graphics.pdf.PdfDocument()
+
+                    val headerHeight = 120
+                    val tableHeaderHeight = 50
+                    val rowHeight = 35
+                    val marginTop = 40
+                    val marginBottom = 40
+                    val availableHeight = pageHeight - marginTop - headerHeight - tableHeaderHeight - marginBottom
+                    val rowsPerPage = availableHeight / rowHeight
+
+                    val totalPages = kotlin.math.ceil(hydrants.size.toDouble() / rowsPerPage).toInt().coerceAtLeast(1)
+
+                    val colWidths = intArrayOf(85, 45, 130, 95, 95, 80, 50, 50, 130)
+                    val tableStartX = 40f
+
+                    for (pageNum in 0 until totalPages) {
+                        val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNum + 1).create()
+                        val page = pdfDocument.startPage(pageInfo)
+                        val canvas = page.canvas
+
+                        val titlePaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.BLACK
+                            textSize = 16f
+                            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+                            textAlign = android.graphics.Paint.Align.CENTER
+                        }
+
+                        val subtitlePaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.DKGRAY
+                            textSize = 12f
+                            textAlign = android.graphics.Paint.Align.CENTER
+                        }
+
+                        val headerPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.BLACK
+                            textSize = 8f
+                            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+                        }
+
+                        val cellPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.BLACK
+                            textSize = 7f
+                        }
+
+                        val linePaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.BLACK
+                            strokeWidth = 1f
+                            style = android.graphics.Paint.Style.STROKE
+                        }
+
+                        val headerBgPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.rgb(240, 240, 240)
+                            style = android.graphics.Paint.Style.FILL
+                        }
+
+                        var yPos = marginTop.toFloat()
+
+                        canvas.drawText("FIRE HYDRANT INVENTORY REPORT", pageWidth / 2f, yPos, titlePaint)
+                        yPos += 25
+
+                        canvas.drawText("$municipalityName, Laguna", pageWidth / 2f, yPos, subtitlePaint)
+                        yPos += 20
+
+                        val datePaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.GRAY
+                            textSize = 10f
+                            textAlign = android.graphics.Paint.Align.CENTER
+                        }
+                        canvas.drawText(
+                            "Date Generated: ${java.text.SimpleDateFormat("MMMM dd, yyyy", java.util.Locale.ENGLISH).format(java.util.Date())}",
+                            pageWidth / 2f, yPos, datePaint
+                        )
+                        yPos += 15
+
+                        canvas.drawText(
+                            "Total: $totalHydrants | Operational: $inService | Non-Operational: $outOfService | Page ${pageNum + 1} of $totalPages",
+                            pageWidth / 2f, yPos, datePaint
+                        )
+                        yPos += 30
+
+                        val tableHeaderY = yPos
+                        canvas.drawRect(tableStartX, tableHeaderY, tableStartX + colWidths.sum(), tableHeaderY + tableHeaderHeight, headerBgPaint)
+
+                        val headers = arrayOf(
+                            "STATION/\nOWNED BY",
+                            "NO. OF\nHYDRANT",
+                            "EXACT LOCATION/\nADDRESS",
+                            "LATITUDE",
+                            "LONGITUDE",
+                            "TYPE/\nCOLOR",
+                            "OPER.",
+                            "NON-\nOPER.",
+                            "REMARKS"
+                        )
+
+                        var xPos = tableStartX
+                        for (i in headers.indices) {
+                            canvas.drawRect(xPos, tableHeaderY, xPos + colWidths[i], tableHeaderY + tableHeaderHeight, linePaint)
+
+                            val lines = headers[i].split("\n")
+                            val lineHeight = 10f
+                            val startY = tableHeaderY + (tableHeaderHeight - lines.size * lineHeight) / 2 + lineHeight
+
+                            for ((lineIndex, line) in lines.withIndex()) {
+                                canvas.drawText(line, xPos + 4, startY + lineIndex * lineHeight, headerPaint)
+                            }
+                            xPos += colWidths[i]
+                        }
+
+                        yPos = tableHeaderY + tableHeaderHeight
+
+                        val startIndex = pageNum * rowsPerPage
+                        val endIndex = minOf(startIndex + rowsPerPage, hydrants.size)
+
+                        for (i in startIndex until endIndex) {
+                            val hydrant = hydrants[i]
+
+                            val lat = hydrant.latitude.toDoubleOrNull()
+                            val lng = hydrant.longitude.toDoubleOrNull()
+
+                            val latitudeDMS = if (lat != null && lat != 0.0) {
+                                decimalToDMS(lat, true)
+                            } else {
+                                hydrant.latitude.ifEmpty { "-" }
+                            }
+
+                            val longitudeDMS = if (lng != null && lng != 0.0) {
+                                decimalToDMS(lng, false)
+                            } else {
+                                hydrant.longitude.ifEmpty { "-" }
+                            }
+
+                            val operational = if (hydrant.serviceStatus == "In Service") "1" else ""
+                            val nonOperational = if (hydrant.serviceStatus == "Out of Service") "1" else ""
+
+                            val rowData = arrayOf(
+                                stationName,
+                                (i + 1).toString(),
+                                hydrant.exactLocation.ifEmpty { "-" },
+                                latitudeDMS,
+                                longitudeDMS,
+                                hydrant.typeColor.ifEmpty { "-" },
+                                operational,
+                                nonOperational,
+                                hydrant.remarks.ifEmpty { "" }
+                            )
+
+                            xPos = tableStartX
+                            for (j in rowData.indices) {
+                                canvas.drawRect(xPos, yPos, xPos + colWidths[j], yPos + rowHeight, linePaint)
+
+                                val maxChars = (colWidths[j] / 5).coerceAtLeast(5)
+                                val displayText = if (rowData[j].length > maxChars) {
+                                    rowData[j].take(maxChars - 2) + ".."
+                                } else {
+                                    rowData[j]
+                                }
+
+                                canvas.drawText(displayText, xPos + 4, yPos + rowHeight / 2 + 3, cellPaint)
+                                xPos += colWidths[j]
+                            }
+
+                            yPos += rowHeight
+                        }
+
+                        val footerPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.GRAY
+                            textSize = 8f
+                            textAlign = android.graphics.Paint.Align.CENTER
+                        }
+                        canvas.drawText(
+                            "Generated by FireGrid App | Bureau of Fire Protection - Laguna Province",
+                            pageWidth / 2f,
+                            (pageHeight - 20).toFloat(),
+                            footerPaint
+                        )
+
+                        pdfDocument.finishPage(page)
                     }
 
-                    val longitudeDMS = if (lng != null && lng != 0.0) {
-                        decimalToDMS(lng, false)
-                    } else {
-                        hydrant.longitude
+                    // Save PDF
+                    val fileName = "FireHydrant_Report_${municipalityName}_${System.currentTimeMillis()}.pdf"
+                    val file = java.io.File(context.cacheDir, fileName)
+                    val outputStream = java.io.FileOutputStream(file)
+                    pdfDocument.writeTo(outputStream)
+                    outputStream.close()
+                    pdfDocument.close()
+
+                    // =====================================================
+                    // AUTOMATIC EMAIL SENDING - NO DIALOG, NO USER INPUT
+                    // =====================================================
+                    val subject = "Fire Hydrant Inventory Report - $municipalityName (${java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.ENGLISH).format(java.util.Date())})"
+                    val body = """
+                        Fire Hydrant Inventory Report
+                        
+                        Municipality: $municipalityName, Laguna
+                        Date: ${java.text.SimpleDateFormat("MMMM dd, yyyy 'at' hh:mm a", java.util.Locale.ENGLISH).format(java.util.Date())}
+                        
+                        Summary:
+                        - Total Hydrants: $totalHydrants
+                        - Operational: $inService
+                        - Non-Operational: $outOfService
+                        
+                        Please find the detailed report attached as PDF.
+                        
+                        ---
+                        Generated by FireGrid App
+                        Bureau of Fire Protection - Laguna Province
+                    """.trimIndent()
+
+                    // SEND EMAIL AUTOMATICALLY using EmailSender class
+                    val emailResult = EmailSender.sendEmailWithAttachment(
+                        subject = subject,
+                        body = body,
+                        attachmentFile = file
+                    )
+
+                    withContext(Dispatchers.Main) {
+                        emailResult.fold(
+                            onSuccess = { message ->
+                                dialogMessage = "PDF Report has been automatically sent to:\nproject.fhydrant@gmail.com\n\nTotal hydrants: $totalHydrants"
+                                showSuccessDialog = true
+                            },
+                            onFailure = { error ->
+                                dialogMessage = "Failed to send email: ${error.message}\n\nPlease check your internet connection."
+                                showErrorDialog = true
+                            }
+                        )
+                        isGeneratingReport = false
                     }
-
-                    // Determine operational status
-                    val operational = if (hydrant.serviceStatus == "In Service") "1" else ""
-                    val nonOperational = if (hydrant.serviceStatus == "Out of Service") "1" else ""
-
-                    // Escape commas in fields
-                    val exactLocation = "\"${hydrant.exactLocation.replace("\"", "\"\"")}\""
-                    val typeColor = "\"${hydrant.typeColor.replace("\"", "\"\"")}\""
-                    val remarks = "\"${hydrant.remarks.replace("\"", "\"\"")}\""
-
-                    csvBuilder.appendLine("$stationName,$hydrantNumber,$exactLocation,$latitudeDMS,$longitudeDMS,$typeColor,$operational,$nonOperational,$remarks")
                 }
-
-                // Create a more readable text version for sharing
-                val textBuilder = StringBuilder()
-                textBuilder.appendLine("FIRE HYDRANT INVENTORY REPORT")
-                textBuilder.appendLine("Municipality: $municipalityName")
-                textBuilder.appendLine("Date Generated: ${java.text.SimpleDateFormat("MMMM dd, yyyy", java.util.Locale.ENGLISH).format(java.util.Date())}")
-                textBuilder.appendLine("Total Hydrants: $totalHydrants | In Service: $inService | Out of Service: $outOfService")
-                textBuilder.appendLine()
-                textBuilder.appendLine("=".repeat(120))
-                textBuilder.appendLine(String.format("%-15s | %-4s | %-30s | %-18s | %-18s | %-15s | %-5s | %-5s | %-20s",
-                    "STATION", "NO.", "EXACT LOCATION", "LATITUDE", "LONGITUDE", "TYPE/COLOR", "OPER", "NON-OP", "REMARKS"))
-                textBuilder.appendLine("=".repeat(120))
-
-                hydrants.forEachIndexed { index, hydrant ->
-                    val stationName = "$municipalityName FS"
-                    val hydrantNumber = (index + 1).toString()
-
-                    val lat = hydrant.latitude.toDoubleOrNull()
-                    val lng = hydrant.longitude.toDoubleOrNull()
-
-                    val latitudeDMS = if (lat != null && lat != 0.0) {
-                        decimalToDMS(lat, true)
-                    } else {
-                        hydrant.latitude.take(18)
-                    }
-
-                    val longitudeDMS = if (lng != null && lng != 0.0) {
-                        decimalToDMS(lng, false)
-                    } else {
-                        hydrant.longitude.take(18)
-                    }
-
-                    val operational = if (hydrant.serviceStatus == "In Service") "1" else ""
-                    val nonOperational = if (hydrant.serviceStatus == "Out of Service") "1" else ""
-
-                    textBuilder.appendLine(String.format("%-15s | %-4s | %-30s | %-18s | %-18s | %-15s | %-5s | %-5s | %-20s",
-                        stationName.take(15),
-                        hydrantNumber,
-                        hydrant.exactLocation.take(30),
-                        latitudeDMS.take(18),
-                        longitudeDMS.take(18),
-                        hydrant.typeColor.take(15),
-                        operational,
-                        nonOperational,
-                        hydrant.remarks.take(20)
-                    ))
-                }
-
-                textBuilder.appendLine("=".repeat(120))
-                textBuilder.appendLine()
-                textBuilder.appendLine("CSV DATA (for spreadsheet import):")
-                textBuilder.appendLine("-".repeat(50))
-                textBuilder.append(csvBuilder.toString())
-
-                // Share the report
-                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Fire Hydrant Report - $municipalityName")
-                    putExtra(android.content.Intent.EXTRA_TEXT, textBuilder.toString())
-                }
-                context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Report"))
-
-                isGeneratingReport = false
             } catch (e: Exception) {
-                isGeneratingReport = false
-                android.widget.Toast.makeText(
-                    context,
-                    "Failed to generate report: ${e.message}",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    dialogMessage = "Failed to generate PDF: ${e.message}"
+                    showErrorDialog = true
+                    isGeneratingReport = false
+                }
             }
         }
     }
@@ -3129,34 +3784,43 @@ fun MunicipalityDetailScreen(
                     }
                 },
                 actions = {
-                    // Generate Report Button - Rectangle shape like other buttons
-                    Button(
-                        onClick = { generateReport() },
-                        enabled = !isGeneratingReport && !hydrantUiState.isLoading,
-                        modifier = Modifier
-                            .padding(end = 12.dp)
-                            .height(40.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF4CAF50)
-                        ),
-                        shape = RoundedCornerShape(8.dp), // Same as other buttons
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
-                    ) {
-                        if (isGeneratingReport) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Text(
-                                text = "Generate\nReport",
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                lineHeight = 14.sp
-                            )
+                    // Generate Report Button - Only visible for admins
+                    if (isAdmin && !isCheckingAdmin) {
+                        Button(
+                            onClick = { generateAndSendPdfReport() },
+                            enabled = !isGeneratingReport && !hydrantUiState.isLoading,
+                            modifier = Modifier
+                                .padding(end = 12.dp)
+                                .height(40.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF4CAF50)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                        ) {
+                            if (isGeneratingReport) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Sending...",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            } else {
+                                Text(
+                                    text = "Generate\nReport",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    lineHeight = 14.sp
+                                )
+                            }
                         }
                     }
                 },
@@ -3178,9 +3842,7 @@ fun MunicipalityDetailScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color.White
-                    ),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Column(
@@ -3246,9 +3908,7 @@ fun MunicipalityDetailScreen(
                 ) {
                     Card(
                         modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFFFCDD2)
-                        ),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFCDD2)),
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                     ) {
                         Column(
@@ -3274,9 +3934,7 @@ fun MunicipalityDetailScreen(
 
                     Card(
                         modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFC8E6C9)
-                        ),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFC8E6C9)),
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                     ) {
                         Column(
@@ -3302,16 +3960,13 @@ fun MunicipalityDetailScreen(
                 }
             }
 
-            // Total Hydrants Card
             item {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .height(56.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFBBDEFB)
-                    ),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFBBDEFB)),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Row(
@@ -3332,22 +3987,23 @@ fun MunicipalityDetailScreen(
             }
 
             item {
-                Button(
-                    onClick = onAddHydrant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF81C784)
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        "Add Fire Hydrant",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium
-                    )
+                // Only show "Add Fire Hydrant" button if user is admin
+                if (isAdmin && !isCheckingAdmin) {
+                    Button(
+                        onClick = onAddHydrant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .height(56.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF81C784)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "Add Fire Hydrant",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
 
@@ -3363,9 +4019,7 @@ fun MunicipalityDetailScreen(
                         modifier = Modifier
                             .weight(1f)
                             .height(56.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFEF5350)
-                        ),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
@@ -3380,9 +4034,7 @@ fun MunicipalityDetailScreen(
                         modifier = Modifier
                             .weight(1f)
                             .height(56.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFEF5350)
-                        ),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
@@ -3396,6 +4048,7 @@ fun MunicipalityDetailScreen(
         }
     }
 }
+
 
 @Composable
 fun WeatherDetail(label: String, value: String) {
@@ -4070,7 +4723,9 @@ fun MapScreen(modifier: Modifier = Modifier) {
     var nearestHydrant by remember { mutableStateOf<FireHydrant?>(null) }
     var nearestHydrantDistance by remember { mutableStateOf<Double?>(null) }
     var showEmergencyDialog by remember { mutableStateOf(false) }
+    var showReportFireDialog by remember { mutableStateOf(false) }  // NEW: Added state for fire report dialog
     val scope = rememberCoroutineScope()
+
     // Directions state
     var directionsResult by remember { mutableStateOf<DirectionsResult?>(null) }
     var userCurrentLocation by remember { mutableStateOf<LatLng?>(null) }
@@ -4255,7 +4910,9 @@ fun MapScreen(modifier: Modifier = Modifier) {
         return if (nearest != null) Pair(nearest, minDistance) else Pair(null, null)
     }
 
-    // Emergency Dialog
+    // =====================================================
+    // EMERGENCY DIALOG - Updated with "Report a Fire Incident"
+    // =====================================================
     if (showEmergencyDialog) {
         AlertDialog(
             onDismissRequest = { showEmergencyDialog = false },
@@ -4285,7 +4942,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // BFP Hotline
+                    // Emergency Hotline 911
                     Surface(
                         onClick = {
                             val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
@@ -4327,7 +4984,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // BFP Direct
+                    // Bureau of Fire Protection 160
                     Surface(
                         onClick = {
                             val intent = android.content.Intent(android.content.Intent.ACTION_DIAL)
@@ -4366,6 +5023,46 @@ fun MapScreen(modifier: Modifier = Modifier) {
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // NEW: Report a Fire Incident Button
+                    Surface(
+                        onClick = {
+                            showEmergencyDialog = false
+                            showReportFireDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFE3F2FD),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Report a Fire Incident",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Submit incident report",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF1565C0)
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Report",
+                                tint = Color(0xFF1565C0),
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -4373,6 +5070,342 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     onClick = { showEmergencyDialog = false }
                 ) {
                     Text("Close", color = Color.Gray)
+                }
+            },
+            containerColor = Color.White
+        )
+    }
+
+// =====================================================
+// REPORT FIRE INCIDENT DIALOG - UPDATED WITH SEPARATE LOCATIONS
+// =====================================================
+    if (showReportFireDialog) {
+        var incidentLocation by remember { mutableStateOf("") }
+        var currentLocation by remember { mutableStateOf("") }
+        var incidentDescription by remember { mutableStateOf("") }
+        var isSubmitting by remember { mutableStateOf(false) }
+        var isGettingLocation by remember { mutableStateOf(false) }
+        var reporterName by remember { mutableStateOf("") }
+        var reporterContact by remember { mutableStateOf("") }
+
+        // Get current user info
+        LaunchedEffect(Unit) {
+            val currentUser = FirebaseAuth.getInstance().currentUser
+            reporterName = currentUser?.displayName ?: ""
+        }
+
+        AlertDialog(
+            onDismissRequest = {
+                if (!isSubmitting) {
+                    showReportFireDialog = false
+                }
+            },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("🔥", fontSize = 24.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Report Fire Incident",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD32F2F)
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Reporter Name
+                    OutlinedTextField(
+                        value = reporterName,
+                        onValueChange = { reporterName = it },
+                        label = { Text("Your Name") },
+                        placeholder = { Text("Enter your name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        enabled = !isSubmitting,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFD32F2F),
+                            focusedLabelColor = Color(0xFFD32F2F)
+                        )
+                    )
+
+                    // Reporter Contact
+                    OutlinedTextField(
+                        value = reporterContact,
+                        onValueChange = { reporterContact = it },
+                        label = { Text("Contact Number") },
+                        placeholder = { Text("Enter your phone number") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        enabled = !isSubmitting,
+                        shape = RoundedCornerShape(8.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFD32F2F),
+                            focusedLabelColor = Color(0xFFD32F2F)
+                        )
+                    )
+
+                    HorizontalDivider(color = Color(0xFFE0E0E0))
+
+                    // Current Location Section
+                    Text(
+                        text = "Your Current Location",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF666666)
+                    )
+
+                    // Get Current Location Button
+                    Button(
+                        onClick = {
+                            if (checkLocationPermission(context)) {
+                                isGettingLocation = true
+                                getCurrentLocation(context) { location ->
+                                    currentLocation = "Lat: %.6f, Lng: %.6f".format(
+                                        location.latitude,
+                                        location.longitude
+                                    )
+                                    isGettingLocation = false
+                                }
+                            } else {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                        android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSubmitting && !isGettingLocation,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4CAF50)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        if (isGettingLocation) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Getting Location...")
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.MyLocation,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Get My Current Location")
+                        }
+                    }
+
+                    // Display Current Location
+                    if (currentLocation.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFE8F5E9),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("📍", fontSize = 20.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Your Location:",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF2E7D32),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = currentLocation,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { currentLocation = "" },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Clear",
+                                        tint = Color(0xFF2E7D32),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = Color(0xFFE0E0E0))
+
+                    // Fire Incident Location Section
+                    Text(
+                        text = "Fire Incident Location *",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD32F2F)
+                    )
+
+                    Text(
+                        text = "Enter the exact address or location where the fire is happening",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+
+                    // Incident Location Field
+                    OutlinedTextField(
+                        value = incidentLocation,
+                        onValueChange = { incidentLocation = it },
+                        label = { Text("Fire Location") },
+                        placeholder = { Text("e.g., 123 Main St, Calamba City, Laguna") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 3,
+                        enabled = !isSubmitting,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFD32F2F),
+                            focusedLabelColor = Color(0xFFD32F2F)
+                        )
+                    )
+
+                    // Description Field
+                    OutlinedTextField(
+                        value = incidentDescription,
+                        onValueChange = { incidentDescription = it },
+                        label = { Text("Description (Optional)") },
+                        placeholder = { Text("Describe what you see (fire size, building type, etc.)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 5,
+                        enabled = !isSubmitting,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFD32F2F),
+                            focusedLabelColor = Color(0xFFD32F2F)
+                        )
+                    )
+
+                    // Emergency reminder
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFEBEE),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("⚠️", fontSize = 20.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "For immediate emergencies, please call 911 or 160 directly!",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFD32F2F)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        when {
+                            reporterName.isBlank() -> {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Please enter your name",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            reporterContact.isBlank() -> {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Please enter your contact number",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            incidentLocation.isBlank() -> {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Please enter the fire incident location",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            else -> {
+                                isSubmitting = true
+
+                                // Submit fire incident report to Firestore
+                                submitFireIncidentReport(
+                                    context = context,
+                                    reporterName = reporterName,
+                                    reporterContact = reporterContact,
+                                    reporterEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown",
+                                    reporterCurrentLocation = currentLocation.ifEmpty { "Not provided" },
+                                    incidentLocation = incidentLocation,
+                                    description = incidentDescription,
+                                    onSuccess = {
+                                        isSubmitting = false
+                                        showReportFireDialog = false
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Fire incident reported successfully! All admins have been notified.",
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
+                                    },
+                                    onFailure = { error ->
+                                        isSubmitting = false
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Failed to submit report: $error",
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                )
+                            }
+                        }
+                    },
+                    enabled = !isSubmitting,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFD32F2F)
+                    )
+                ) {
+                    if (isSubmitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Submitting...")
+                    } else {
+                        Text("Submit Report")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showReportFireDialog = false },
+                    enabled = !isSubmitting
+                ) {
+                    Text("Cancel", color = Color.Gray)
                 }
             },
             containerColor = Color.White
@@ -4484,7 +5517,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
             )
         }
 
-        // Zoom and Location Controls - Bottom Right (automatically moves up when card is shown)
+        // Zoom and Location Controls - Bottom Right
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -4676,14 +5709,14 @@ fun MapScreen(modifier: Modifier = Modifier) {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Location - Same size as municipality
+                    // Location
                     Text(
                         text = hydrant.exactLocation,
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color(0xFF757575)
                     )
 
-                    // Municipality - Same size as exact location
+                    // Municipality
                     Text(
                         text = "Municipality: ${hydrant.municipality}",
                         style = MaterialTheme.typography.bodyMedium,
@@ -4698,7 +5731,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Distance Badge - Shows directions info if available
+                        // Distance Badge
                         Surface(
                             color = Color(0xFFE3F2FD),
                             shape = RoundedCornerShape(20.dp)
@@ -4733,7 +5766,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
                             }
                         }
 
-                        // Directions Button - Now functional!
+                        // Directions Button
                         Button(
                             onClick = {
                                 userCurrentLocation?.let { currentLoc ->
@@ -4759,7 +5792,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                         }
                                     }
                                 } ?: run {
-                                    // Get current location first
                                     if (checkLocationPermission(context)) {
                                         getCurrentLocation(context) { location ->
                                             userCurrentLocation = LatLng(location.latitude, location.longitude)
@@ -5438,7 +6470,7 @@ fun MunicipalityButton(name: String, onClick: () -> Unit) {
 fun ProfileScreen(
     modifier: Modifier = Modifier,
     userName: String,
-    userEmail: String,  // ✅ NEW PARAMETER
+    userEmail: String,
     onLogout: () -> Unit,
     onSettingsClick: () -> Unit,
     onHelpFaqClick: () -> Unit,
@@ -5572,6 +6604,7 @@ fun ProfileScreen(
             shadowElevation = 1.dp
         ) {
             Column {
+                // ✅ Settings - ALWAYS VISIBLE FOR ALL USERS
                 ProfileMenuItem(
                     title = "Settings",
                     onClick = onSettingsClick
@@ -6409,11 +7442,87 @@ fun ReportProblemScreen(onBack: () -> Unit) {
 fun SettingsScreen(
     onBack: () -> Unit,
     onAddAdminClick: () -> Unit,
-    onRemoveAdminClick: () -> Unit // NEW: Required parameter
+    onRemoveAdminClick: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var showChangePasswordDialog by remember { mutableStateOf(false) }
+    val auth = FirebaseAuth.getInstance()
+    val userEmail = auth.currentUser?.email ?: ""
+    val firestore = Firebase.firestore
 
+    var showChangePasswordDialog by remember { mutableStateOf(false) }
+    var isAdmin by remember { mutableStateOf(false) }
+    var isCheckingAdmin by remember { mutableStateOf(true) }
+
+    // =====================================================
+    // NEW: NOTIFICATION STATES
+    // =====================================================
+    var notificationsEnabled by remember { mutableStateOf(true) }
+    var emergencyAlertsEnabled by remember { mutableStateOf(true) }
+    var hydrantUpdatesEnabled by remember { mutableStateOf(true) }
+    var showNotificationSettingsDialog by remember { mutableStateOf(false) }
+
+    // Check if notification permission is granted
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
+    // Permission launcher for Android 13+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasNotificationPermission = isGranted
+        if (isGranted) {
+            notificationsEnabled = true
+            // Show success notification
+            showTestNotification(
+                context = context,
+                title = "🔔 Notifications Enabled!",
+                message = "You will now receive FireGrid alerts and updates."
+            )
+        }
+    }
+
+    // Initialize notification channels when screen loads
+    LaunchedEffect(Unit) {
+        createNotificationChannels(context)
+
+        // Load saved preferences
+        val prefs = context.getSharedPreferences("firegrid_prefs", Context.MODE_PRIVATE)
+        notificationsEnabled = prefs.getBoolean("notifications_enabled", true)
+        emergencyAlertsEnabled = prefs.getBoolean("emergency_enabled", true)
+        hydrantUpdatesEnabled = prefs.getBoolean("hydrant_updates_enabled", true)
+    }
+
+    // Check if user is admin
+    LaunchedEffect(userEmail) {
+        if (userEmail.isNotEmpty()) {
+            firestore.collection("admins")
+                .document(userEmail.lowercase())
+                .get()
+                .addOnSuccessListener { document ->
+                    isAdmin = document.exists()
+                    isCheckingAdmin = false
+                }
+                .addOnFailureListener {
+                    isAdmin = false
+                    isCheckingAdmin = false
+                }
+        } else {
+            isAdmin = false
+            isCheckingAdmin = false
+        }
+    }
+
+    // Change Password Dialog
     if (showChangePasswordDialog) {
         ChangePasswordDialog(
             onDismiss = { showChangePasswordDialog = false },
@@ -6425,6 +7534,211 @@ fun SettingsScreen(
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             }
+        )
+    }
+
+    // =====================================================
+    // NEW: NOTIFICATION SETTINGS DIALOG
+    // =====================================================
+    if (showNotificationSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showNotificationSettingsDialog = false },
+            title = {
+                Text(
+                    text = "🔔 Notification Settings",
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFF6B35)
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Main notification toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Enable Notifications",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Receive all FireGrid alerts",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = notificationsEnabled && hasNotificationPermission,
+                            onCheckedChange = { enabled ->
+                                if (enabled && !hasNotificationPermission) {
+                                    // Request permission on Android 13+
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notificationPermissionLauncher.launch(
+                                            Manifest.permission.POST_NOTIFICATIONS
+                                        )
+                                    } else {
+                                        hasNotificationPermission = true
+                                        notificationsEnabled = true
+                                    }
+                                } else {
+                                    notificationsEnabled = enabled
+                                    saveNotificationPreferences(context, enabled, emergencyAlertsEnabled, hydrantUpdatesEnabled)
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF4CAF50)
+                            )
+                        )
+                    }
+
+                    HorizontalDivider(color = Color(0xFFE0E0E0))
+
+                    // Emergency alerts toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "🔥 Emergency Alerts",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Fire incidents & urgent alerts",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = emergencyAlertsEnabled && notificationsEnabled,
+                            onCheckedChange = { enabled ->
+                                emergencyAlertsEnabled = enabled
+                                saveNotificationPreferences(context, notificationsEnabled, enabled, hydrantUpdatesEnabled)
+                            },
+                            enabled = notificationsEnabled,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFFD32F2F)
+                            )
+                        )
+                    }
+
+                    // Hydrant updates toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "🚒 Hydrant Updates",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Status changes & maintenance",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = hydrantUpdatesEnabled && notificationsEnabled,
+                            onCheckedChange = { enabled ->
+                                hydrantUpdatesEnabled = enabled
+                                saveNotificationPreferences(context, notificationsEnabled, emergencyAlertsEnabled, enabled)
+                            },
+                            enabled = notificationsEnabled,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF4CAF50)
+                            )
+                        )
+                    }
+
+                    // Permission warning if needed
+                    if (!hasNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFFFF3E0),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                Text(
+                                    text = "⚠️ Permission Required",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE65100)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Notification permission is required to receive alerts.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFE65100)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                TextButton(
+                                    onClick = {
+                                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                            data = Uri.fromParts("package", context.packageName, null)
+                                        }
+                                        context.startActivity(intent)
+                                    }
+                                ) {
+                                    Text("Open Settings", color = Color(0xFFE65100))
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showNotificationSettingsDialog = false },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF6B35)
+                    )
+                ) {
+                    Text("Done")
+                }
+            },
+            dismissButton = {
+                // Test notification button
+                TextButton(
+                    onClick = {
+                        if (hasNotificationPermission && notificationsEnabled) {
+                            showTestNotification(
+                                context = context,
+                                title = "🧪 Test Notification",
+                                message = "This is a test notification from FireGrid!"
+                            )
+                            android.widget.Toast.makeText(
+                                context,
+                                "Test notification sent!",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Enable notifications first",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                ) {
+                    Text("Test", color = Color(0xFF4CAF50))
+                }
+            },
+            containerColor = Color.White
         )
     }
 
@@ -6458,10 +7772,11 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .background(Color(0xFFF5F5F5))
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Account Settings Section
+            // Account Settings Section - ALWAYS VISIBLE
             Text(
                 text = "Account Settings",
                 style = MaterialTheme.typography.titleMedium,
@@ -6470,7 +7785,7 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // Change Password Card
+            // Change Password Card - ALWAYS VISIBLE
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -6523,125 +7838,140 @@ fun SettingsScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Admin Settings Section
-            Text(
-                text = "Admin Settings",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF666666),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            // Add Admin Card - CLICKING THIS NAVIGATES TO ADD ADMIN SCREEN
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                Surface(
-                    onClick = onAddAdminClick,  // THIS CALLS THE NAVIGATION CALLBACK
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color.Transparent
+            // Admin Settings Section - ONLY VISIBLE FOR ADMINS
+            if (isCheckingAdmin) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(32.dp),
+                        color = Color(0xFFFF6B35)
+                    )
+                }
+            } else if (isAdmin) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Admin Settings",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF666666),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                // Add Admin Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Surface(
+                        onClick = onAddAdminClick,
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color.Transparent
                     ) {
                         Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFC8E6C9)),
-                                contentAlignment = Alignment.Center
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("👑", fontSize = 20.sp)
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFC8E6C9)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("👑", fontSize = 20.sp)
+                                }
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column {
+                                    Text(
+                                        text = "Add Admin",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = "Promote a user to admin",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                }
                             }
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column {
-                                Text(
-                                    text = "Add Admin",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = "Promote a user to admin",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Add Admin",
+                                tint = Color(0xFF757575)
+                            )
                         }
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowRight,
-                            contentDescription = "Add Admin",
-                            tint = Color(0xFF757575)
-                        )
+                    }
+                }
+
+                // Remove Admin Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Surface(
+                        onClick = onRemoveAdminClick,
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color.Transparent
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFFCDD2)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("❌", fontSize = 20.sp)
+                                }
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column {
+                                    Text(
+                                        text = "Remove Admin",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = "Revoke admin privileges",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Remove Admin",
+                                tint = Color(0xFF757575)
+                            )
+                        }
                     }
                 }
             }
-            // ADD THIS NEW CARD - Remove Admin Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                Surface(
-                    onClick = onRemoveAdminClick,
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color.Transparent
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFFFCDD2)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("❌", fontSize = 20.sp)
-                            }
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column {
-                                Text(
-                                    text = "Remove Admin",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = "Revoke admin privileges",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray
-                                )
-                            }
-                        }
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowRight,
-                            contentDescription = "Remove Admin",
-                            tint = Color(0xFF757575)
-                        )
-                    }
-                }
-            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // App Settings Section
+            // App Settings Section - ALWAYS VISIBLE
             Text(
                 text = "App Settings",
                 style = MaterialTheme.typography.titleMedium,
@@ -6650,51 +7980,84 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // Notifications Card
+            // =====================================================
+            // NOTIFICATIONS CARD - NOW CLICKABLE AND WORKING!
+            // =====================================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Surface(
+                    onClick = { showNotificationSettingsDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent
                 ) {
                     Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFBBDEFB)),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("🔔", fontSize = 20.sp)
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFBBDEFB)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("🔔", fontSize = 20.sp)
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    text = "Notifications",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = if (notificationsEnabled && hasNotificationPermission)
+                                        "Enabled"
+                                    else
+                                        "Tap to configure",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (notificationsEnabled && hasNotificationPermission)
+                                        Color(0xFF4CAF50)
+                                    else
+                                        Color.Gray
+                                )
+                            }
                         }
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text(
-                                text = "Notifications",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = "Coming soon",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Status indicator
+                            if (notificationsEnabled && hasNotificationPermission) {
+                                Surface(
+                                    color = Color(0xFFE8F5E9),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        text = "ON",
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF4CAF50)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Notification Settings",
+                                tint = Color(0xFF757575)
                             )
                         }
                     }
-                    Text(
-                        text = "Soon",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFFF6B35),
-                        fontWeight = FontWeight.Medium
-                    )
                 }
             }
 
@@ -6708,6 +8071,122 @@ fun SettingsScreen(
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
         }
+    }
+}
+
+// =====================================================
+// HELPER FUNCTIONS - ADD THESE OUTSIDE THE COMPOSABLE
+// =====================================================
+
+/**
+ * Create notification channels (required for Android 8.0+)
+ */
+fun createNotificationChannels(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Emergency Channel (High Priority)
+        val emergencyChannel = NotificationChannel(
+            "emergency_channel",
+            "Emergency Alerts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Critical fire incident and emergency notifications"
+            enableLights(true)
+            lightColor = android.graphics.Color.RED
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
+        }
+
+        // Hydrant Updates Channel
+        val hydrantChannel = NotificationChannel(
+            "hydrant_updates_channel",
+            "Hydrant Updates",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Fire hydrant status updates and maintenance alerts"
+            enableLights(true)
+            lightColor = android.graphics.Color.GREEN
+        }
+
+        // General Channel
+        val generalChannel = NotificationChannel(
+            "general_channel",
+            "General Notifications",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "General app notifications and updates"
+        }
+
+        notificationManager.createNotificationChannels(
+            listOf(emergencyChannel, hydrantChannel, generalChannel)
+        )
+    }
+}
+
+/**
+ * Show a test notification
+ */
+fun showTestNotification(context: Context, title: String, message: String) {
+    // Check permission first
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+    }
+
+    val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+    }
+
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+    val notification = NotificationCompat.Builder(context, "general_channel")
+        .setSmallIcon(android.R.drawable.ic_dialog_info) // Using system icon - replace with your own
+        .setContentTitle(title)
+        .setContentText(message)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setSound(soundUri)
+        .setVibrate(longArrayOf(0, 250, 250, 250))
+        .build()
+
+    with(NotificationManagerCompat.from(context)) {
+        try {
+            notify(System.currentTimeMillis().toInt(), notification)
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+        }
+    }
+}
+
+/**
+ * Save notification preferences
+ */
+fun saveNotificationPreferences(
+    context: Context,
+    notificationsEnabled: Boolean,
+    emergencyEnabled: Boolean,
+    hydrantUpdatesEnabled: Boolean
+) {
+    val prefs = context.getSharedPreferences("firegrid_prefs", Context.MODE_PRIVATE)
+    prefs.edit().apply {
+        putBoolean("notifications_enabled", notificationsEnabled)
+        putBoolean("emergency_enabled", emergencyEnabled)
+        putBoolean("hydrant_updates_enabled", hydrantUpdatesEnabled)
+        apply()
     }
 }
 

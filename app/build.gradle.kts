@@ -40,6 +40,22 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // THIS FIXES THE META-INF ERROR
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/NOTICE.md",
+                "META-INF/LICENSE.md",
+                "META-INF/NOTICE",
+                "META-INF/LICENSE",
+                "META-INF/NOTICE.txt",
+                "META-INF/LICENSE.txt",
+                "META-INF/INDEX.LIST",
+                "META-INF/*.kotlin_module"
+            )
+        }
+    }
 }
 
 dependencies {
@@ -63,11 +79,20 @@ dependencies {
     // Google Play Services Location
     implementation("com.google.android.gms:play-services-location:21.0.1")
 
+    // JavaMail for automatic email sending
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
+
     // Firebase BOM - Single declaration manages all Firebase versions
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-analytics")
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-database-ktx")
+
+    // =====================================================
+    // FIREBASE CLOUD MESSAGING - FOR PUSH NOTIFICATIONS
+    // =====================================================
+    implementation("com.google.firebase:firebase-messaging-ktx")
 
     // Coroutines for async operations
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

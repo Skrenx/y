@@ -2,11 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Add permissions here (outside application tag) -->
+    <!-- Existing permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- =====================================================
+         NEW: NOTIFICATION PERMISSIONS
+         ===================================================== -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
         android:allowBackup="true"
@@ -23,9 +30,60 @@
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyCdwrCeDEi3tPzjg6-2lGNueLJqHJFv1ZQ"/>
 
+        <!-- FileProvider for PDF sharing -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Logout Service -->
         <service
             android:name=".LogoutService"
             android:stopWithTask="false" />
+
+        <!-- =====================================================
+             NEW: HYDRANT CHANGE LISTENER SERVICE
+             Listens for hydrant changes and sends notifications to all admins
+             ===================================================== -->
+        <service
+            android:name=".HydrantChangeListenerService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- =====================================================
+             NEW: FIREBASE CLOUD MESSAGING SERVICE
+             ===================================================== -->
+        <service
+            android:name=".FireGridMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- =====================================================
+             NEW: FCM DEFAULT NOTIFICATION SETTINGS
+             ===================================================== -->
+
+        <!-- Default notification channel (used when app is in background) -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="general_channel" />
+
+        <!-- Default notification icon -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
+
+        <!-- Default notification color -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
 
         <activity
             android:name=".MainActivity"
