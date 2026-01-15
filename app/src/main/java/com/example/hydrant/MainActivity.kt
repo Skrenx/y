@@ -116,6 +116,8 @@ import android.content.pm.PackageManager
 import android.app.PendingIntent
 import android.media.RingtoneManager
 import android.content.Context
+import androidx.compose.ui.platform.LocalContext
+
 
 // Weather Data Classes
 data class WeatherResponse(
@@ -198,6 +200,19 @@ data class FireIncidentAlert(
         } catch (e: Exception) { null }
     }
 }
+
+// Fire Incident Report for Mail Screen
+data class FireIncidentReport(
+    val documentId: String,
+    val reporterName: String,
+    val reporterContact: String,
+    val reporterEmail: String,
+    val reporterCurrentLocation: String,
+    val incidentLocation: String,
+    val description: String,
+    val timestamp: com.google.firebase.Timestamp?,
+    val status: String // "pending", "acknowledged", "resolved"
+)
 
 // Weather API Functions
 suspend fun fetchWeatherData(municipalityName: String): DailyWeather? {
@@ -621,9 +636,16 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun HYDRANTApp() {
     val auth = FirebaseAuth.getInstance()
-    var isLoggedIn by rememberSaveable { mutableStateOf(auth.currentUser != null) }
+    // ✅ FIX: Check if user is ACTUALLY logged in by verifying email is verified or user exists
+    var isLoggedIn by rememberSaveable { mutableStateOf(false) }
     var showSignUp by rememberSaveable { mutableStateOf(false) }
-    var signUpSuccessMessage by rememberSaveable { mutableStateOf<String?>(null) }  // NEW: Added this state
+    var signUpSuccessMessage by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // ✅ FIX: Check auth state on app start
+    LaunchedEffect(Unit) {
+        val currentUser = auth.currentUser
+        isLoggedIn = currentUser != null && currentUser.email != null
+    }
 
     val userName = auth.currentUser?.displayName ?: "Full Name"
 
@@ -1380,7 +1402,8 @@ fun SignUpScreen(
 fun MainApp(userName: String, onLogout: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val auth = FirebaseAuth.getInstance()
-    val userEmail = auth.currentUser?.email ?: ""  // ✅ ADD THIS LINE
+    val userEmail = auth.currentUser?.email ?: ""
+    val firestore = Firebase.firestore
 
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
     var selectedMunicipality by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1398,12 +1421,14 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
     var showAddAdminScreen by rememberSaveable { mutableStateOf(false) }
     var showRemoveAdminScreen by rememberSaveable { mutableStateOf(false) }
     var showInvalidCoordinatesOnly by rememberSaveable { mutableStateOf(false) }
+
     // Fire Incident Alert States
     var showFireIncidentAlert by remember { mutableStateOf(false) }
     var currentFireIncident by remember { mutableStateOf<FireIncidentAlert?>(null) }
     var navigateToMapWithIncident by remember { mutableStateOf(false) }
     var incidentLocationForMap by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var isAdminForIncident by remember { mutableStateOf(false) }
+    var showMailScreen by rememberSaveable { mutableStateOf(false) }
 
     var backPressedOnce by remember { mutableStateOf(false) }
 
@@ -1416,47 +1441,65 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
         }
     }
 
-    // Check if user is admin for fire incidents
+    // ✅ ADD THIS - Check if user is admin and listen for fire incident reports
     LaunchedEffect(userEmail) {
         if (userEmail.isNotEmpty()) {
-            Firebase.firestore.collection("admins")
+            firestore.collection("admins")
                 .document(userEmail.lowercase())
                 .get()
                 .addOnSuccessListener { document ->
-                    isAdminForIncident = document.exists()
-                }
-        }
-    }
+                    if (document.exists()) {
+                        isAdminForIncident = true
 
-// Listen for fire incidents (admin only)
-    LaunchedEffect(isAdminForIncident, userEmail) {
-        if (isAdminForIncident && userEmail.isNotEmpty()) {
-            Firebase.firestore.collection("fire_incident_reports")
-                .whereEqualTo("status", "pending")
-                .addSnapshotListener { snapshots, error ->
-                    if (error != null || snapshots == null) return@addSnapshotListener
+                        // Listen for new pending fire incident reports
+                        firestore.collection("fire_incident_reports")
+                            .whereEqualTo("status", "pending")
+                            .whereEqualTo("notified", false)
+                            .addSnapshotListener { snapshot, error ->
+                                if (error != null) {
+                                    android.util.Log.e("FireIncident", "Listen failed", error)
+                                    return@addSnapshotListener
+                                }
 
-                    for (doc in snapshots.documents) {
-                        val notifiedAdmins = doc.get("notifiedAdmins") as? List<String> ?: emptyList()
-                        if (!notifiedAdmins.contains(userEmail.lowercase())) {
-                            currentFireIncident = FireIncidentAlert(
-                                documentId = doc.id,
-                                reporterName = doc.getString("reporterName") ?: "",
-                                reporterContact = doc.getString("reporterContact") ?: "",
-                                reporterEmail = doc.getString("reporterEmail") ?: "",
-                                reporterCurrentLocation = doc.getString("reporterCurrentLocation") ?: "",
-                                incidentLocation = doc.getString("incidentLocation") ?: "",
-                                description = doc.getString("description") ?: "",
-                                timestamp = doc.getTimestamp("timestamp")
-                            )
-                            showFireIncidentAlert = true
+                                snapshot?.documentChanges?.forEach { change ->
+                                    if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                                        val doc = change.document
+                                        val incident = FireIncidentAlert(
+                                            documentId = doc.id,
+                                            reporterName = doc.getString("reporterName") ?: "",
+                                            reporterContact = doc.getString("reporterContact") ?: "",
+                                            reporterEmail = doc.getString("reporterEmail") ?: "",
+                                            reporterCurrentLocation = doc.getString("reporterCurrentLocation") ?: "",
+                                            incidentLocation = doc.getString("incidentLocation") ?: "",
+                                            description = doc.getString("description") ?: "",
+                                            timestamp = doc.getTimestamp("timestamp")
+                                        )
 
-                            // Mark as notified
-                            val updatedList = notifiedAdmins.toMutableList().apply { add(userEmail.lowercase()) }
-                            doc.reference.update("notifiedAdmins", updatedList)
-                            break
-                        }
+                                        // Mark as notified so it doesn't show again
+                                        firestore.collection("fire_incident_reports")
+                                            .document(doc.id)
+                                            .update("notified", true)
+
+                                        // Show the alert dialog
+                                        currentFireIncident = incident
+                                        showFireIncidentAlert = true
+
+                                        // Also show push notification
+                                        showFireIncidentNotification(
+                                            context = context,
+                                            reporterName = incident.reporterName,
+                                            incidentLocation = incident.incidentLocation,
+                                            description = incident.description
+                                        )
+                                    }
+                                }
+                            }
+                    } else {
+                        isAdminForIncident = false
                     }
+                }
+                .addOnFailureListener {
+                    isAdminForIncident = false
                 }
         }
     }
@@ -1483,11 +1526,18 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             TermsPrivacyScreen(onBack = { showTermsPrivacyScreen = false })
         }
         showAddAdminScreen -> {
-            BackHandler { showAddAdminScreen = false }
+            BackHandler {
+                showAddAdminScreen = false
+                showSettingsScreen = true
+            }
             AddAdminScreen(
-                onBack = { showAddAdminScreen = false },
+                onBack = {
+                    showAddAdminScreen = false
+                    showSettingsScreen = true
+                },
                 onSuccess = { email ->
                     showAddAdminScreen = false
+                    showSettingsScreen = true
                     android.widget.Toast.makeText(
                         context,
                         "$email has been promoted to admin!",
@@ -1497,11 +1547,18 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         showRemoveAdminScreen -> {
-            BackHandler { showRemoveAdminScreen = false }
+            BackHandler {
+                showRemoveAdminScreen = false
+                showSettingsScreen = true
+            }
             RemoveAdminScreen(
-                onBack = { showRemoveAdminScreen = false },
+                onBack = {
+                    showRemoveAdminScreen = false
+                    showSettingsScreen = true
+                },
                 onSuccess = { email ->
                     showRemoveAdminScreen = false
+                    showSettingsScreen = true
                     android.widget.Toast.makeText(
                         context,
                         "$email has been removed from admin!",
@@ -1524,6 +1581,20 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                 }
             )
         }
+
+        showMailScreen -> {
+            BackHandler { showMailScreen = false }
+            FireIncidentReportsScreen(
+                onBack = { showMailScreen = false },
+                onViewOnMap = { lat, lng ->
+                    showMailScreen = false
+                    incidentLocationForMap = Pair(lat, lng)
+                    navigateToMapWithIncident = true
+                    currentDestination = AppDestinations.MAP
+                }
+            )
+        }
+
         selectedHydrantForView != null -> {
             BackHandler { selectedHydrantForView = null }
             ViewHydrantLocationScreen(
@@ -1541,10 +1612,16 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         showHydrantMapScreen && selectedMunicipality != null -> {
-            BackHandler { showHydrantMapScreen = false }
+            BackHandler {
+                showHydrantMapScreen = false
+                // ✅ FIX: DON'T clear selectedMunicipality
+            }
             FireHydrantMapScreen(
                 municipalityName = selectedMunicipality!!,
-                onBack = { showHydrantMapScreen = false },
+                onBack = {
+                    showHydrantMapScreen = false
+                    // ✅ FIX: DON'T clear selectedMunicipality
+                },
                 onShowInvalidCoordinates = {
                     showInvalidCoordinatesOnly = true
                     showHydrantMapScreen = false
@@ -1556,12 +1633,14 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             BackHandler {
                 showHydrantListScreen = false
                 showInvalidCoordinatesOnly = false
+                // ✅ FIX: DON'T clear selectedMunicipality - just hide the list screen
             }
             FireHydrantListScreen(
                 municipalityName = selectedMunicipality!!,
                 onBack = {
                     showHydrantListScreen = false
                     showInvalidCoordinatesOnly = false
+                    // ✅ FIX: DON'T clear selectedMunicipality - just hide the list screen
                 },
                 onEditHydrant = { hydrant ->
                     selectedHydrantForEdit = hydrant
@@ -1574,18 +1653,28 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
         showAddHydrantScreen && selectedMunicipality != null -> {
-            BackHandler { showAddHydrantScreen = false }
+            BackHandler {
+                showAddHydrantScreen = false
+                // ✅ FIX: DON'T clear selectedMunicipality
+            }
             AddFireHydrantScreen(
                 municipalityName = selectedMunicipality!!,
-                onBack = { showAddHydrantScreen = false },
+                onBack = {
+                    showAddHydrantScreen = false
+                    // ✅ FIX: DON'T clear selectedMunicipality
+                },
                 onSuccess = { showAddHydrantScreen = false }
             )
         }
         selectedMunicipality != null -> {
-            BackHandler { selectedMunicipality = null }
+            BackHandler {
+                selectedMunicipality = null  // ✅ CORRECT: Clear municipality to go back to Home
+            }
             MunicipalityDetailScreen(
                 municipalityName = selectedMunicipality!!,
-                onBack = { selectedMunicipality = null },
+                onBack = {
+                    selectedMunicipality = null  // ✅ CORRECT: Clear municipality to go back to Home
+                },
                 onAddHydrant = { showAddHydrantScreen = true },
                 onShowHydrantList = { showHydrantListScreen = true },
                 onShowHydrantMap = { showHydrantMapScreen = true }
@@ -1604,6 +1693,7 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                     ).show()
                 }
             }
+
             // Fire Incident Alert Dialog
             if (showFireIncidentAlert && currentFireIncident != null) {
                 FireIncidentAlertDialog(
@@ -1664,12 +1754,13 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                             onIncidentHandled = {
                                 navigateToMapWithIncident = false
                                 incidentLocationForMap = null
-                            }
+                            },
+                            onMailClick = { showMailScreen = true }
                         )
                         AppDestinations.PROFILE -> ProfileScreen(
                             modifier = Modifier.padding(innerPadding),
                             userName = userName,
-                            userEmail = userEmail,  // ✅ ADD THIS LINE
+                            userEmail = userEmail,
                             onLogout = onLogout,
                             onSettingsClick = { showSettingsScreen = true },
                             onHelpFaqClick = { showHelpFaqScreen = true },
@@ -1877,7 +1968,13 @@ fun FireHydrantListScreen(
                         }
                     },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
+                        IconButton(onClick = {
+                            // ✅ FIX: Clear search and filters before going back
+                            searchQuery = ""
+                            isSearchActive = false
+                            selectedFilter = "All"
+                            onBack()
+                        }) {
                             Icon(
                                 imageVector = Icons.Default.ArrowBack,
                                 contentDescription = "Back",
@@ -2917,6 +3014,10 @@ fun EditFireHydrantScreen(
                     onClick = {
                         when {
                             exactLocation.isBlank() -> validationError = "Exact location is required"
+                            latitude.isBlank() -> validationError = "Latitude is required"
+                            longitude.isBlank() -> validationError = "Longitude is required"
+                            typeColor.isBlank() -> validationError = "Type/Color is required"
+                            serviceStatus.isBlank() -> validationError = "Service status is required"
                             else -> {
                                 hydrantViewModel.updateFireHydrant(
                                     hydrant.copy(
@@ -2980,6 +3081,7 @@ fun AddFireHydrantScreen(
     var remarks by rememberSaveable { mutableStateOf("") }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var validationError by rememberSaveable { mutableStateOf("") }
+    var isSubmitting by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(hydrantUiState.addSuccess) {
         if (hydrantUiState.addSuccess) {
@@ -2995,6 +3097,7 @@ fun AddFireHydrantScreen(
 
             snackbarHostState.showSnackbar("Fire hydrant added successfully!")
             hydrantViewModel.resetAddSuccess()
+            isSubmitting = false
             onSuccess()
         }
     }
@@ -3003,6 +3106,7 @@ fun AddFireHydrantScreen(
         hydrantUiState.error?.let {
             snackbarHostState.showSnackbar("Error: $it")
             hydrantViewModel.clearError()
+            isSubmitting = false
         }
     }
 
@@ -3219,11 +3323,21 @@ fun AddFireHydrantScreen(
                 Button(
                     onClick = {
                         when {
+                            isSubmitting || hydrantUiState.isLoading -> {
+                                // Do nothing if already submitting - prevents multiple clicks
+                            }
                             exactLocation.isBlank() -> validationError = "Exact location is required"
                             latitude.isBlank() -> validationError = "Latitude is required"
                             longitude.isBlank() -> validationError = "Longitude is required"
                             typeColor.isBlank() -> validationError = "Type/Color is required"
+                            latitude.toDoubleOrNull() == null -> validationError = "Latitude must be a valid number"
+                            longitude.toDoubleOrNull() == null -> validationError = "Longitude must be a valid number"
+                            latitude.toDouble() < -90 || latitude.toDouble() > 90 -> validationError = "Latitude must be between -90 and 90"
+                            longitude.toDouble() < -180 || longitude.toDouble() > 180 -> validationError = "Longitude must be between -180 and 180"
                             else -> {
+                                // Set flag to prevent multiple submissions
+                                isSubmitting = true
+
                                 // Hydrant name will be auto-generated in repository
                                 hydrantViewModel.addFireHydrant(
                                     hydrantName = "", // Will be auto-generated
@@ -3241,13 +3355,13 @@ fun AddFireHydrantScreen(
                     modifier = Modifier
                         .weight(1f)
                         .height(50.dp),
-                    enabled = !hydrantUiState.isLoading,
+                    enabled = !isSubmitting && !hydrantUiState.isLoading,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFF81C784)
                     ),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    if (hydrantUiState.isLoading) {
+                    if (isSubmitting || hydrantUiState.isLoading) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
                             color = Color.White,
@@ -3589,9 +3703,10 @@ fun MunicipalityDetailScreen(
     val windSpeedKmh = ((weatherData?.windSpeed ?: 0.0) * 3.6).toInt()
     val windSpeed = "$windSpeedKmh km/h"
 
-    val outOfService = hydrantUiState.outOfServiceCount
-    val inService = hydrantUiState.inServiceCount
-    val totalHydrants = outOfService + inService
+    // ✅ FIX: Remember counts to prevent glitching
+    val outOfService = remember(hydrantUiState.outOfServiceCount) { hydrantUiState.outOfServiceCount }
+    val inService = remember(hydrantUiState.inServiceCount) { hydrantUiState.inServiceCount }
+    val totalHydrants = remember(outOfService, inService) { outOfService + inService }
 
     // Function to convert decimal degrees to DMS format
     fun decimalToDMS(decimal: Double, isLatitude: Boolean): String {
@@ -4532,13 +4647,22 @@ fun FireHydrantMapScreen(
     }
 }
 
+// Add this import at the top of your file:
+// import androidx.compose.ui.platform.LocalContext
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ViewHydrantLocationScreen(
     hydrant: FireHydrant,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    var isMapReady by remember { mutableStateOf(false) }
+    var mapLoaded by remember { mutableStateOf(false) }
+    var markerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
+    var markersReady by remember { mutableStateOf(false) }
+
     val lat = hydrant.latitude.toDoubleOrNull()
     val lng = hydrant.longitude.toDoubleOrNull()
 
@@ -4548,53 +4672,85 @@ fun ViewHydrantLocationScreen(
             lng >= -180 && lng <= 180 &&
             lat != 0.0 && lng != 0.0
 
-    val hydrantLocation = if (hasValidCoordinates) {
-        LatLng(lat!!, lng!!)
-    } else {
-        getMunicipalityCoordinates(hydrant.municipality)
+    val hydrantLocation = remember(hasValidCoordinates, lat, lng, hydrant.municipality) {
+        if (hasValidCoordinates) {
+            LatLng(lat!!, lng!!)
+        } else {
+            getMunicipalityCoordinates(hydrant.municipality)
+        }
     }
 
     val cameraPositionState = rememberCameraPositionState {
-        // Zoom level 17 for close-up view of the hydrant location
         position = CameraPosition.fromLatLngZoom(hydrantLocation, 17f)
     }
 
-    // Create pin marker based on service status
-    val markerIcon = remember(hydrant.serviceStatus) {
-        val width = 48
-        val height = 48
-        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bitmap)
-        val paint = android.graphics.Paint().apply {
-            isAntiAlias = true
-            color = if (hydrant.serviceStatus == "In Service") {
-                android.graphics.Color.parseColor("#4CAF50")
-            } else {
-                android.graphics.Color.parseColor("#EF5350")
+    // Create custom marker after composition - same approach as FireHydrantMapScreen
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100) // Small delay to ensure everything is initialized
+        try {
+            val width = 48
+            val height = 48
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            val paint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = if (hydrant.serviceStatus == "In Service") {
+                    android.graphics.Color.parseColor("#4CAF50")
+                } else {
+                    android.graphics.Color.parseColor("#EF5350")
+                }
+                style = android.graphics.Paint.Style.FILL
             }
-            style = android.graphics.Paint.Style.FILL
+
+            val centerX = 24f
+            val topRadius = 14f
+            val bottomY = 44f
+
+            // Draw filled circle for the main body
+            canvas.drawCircle(centerX, topRadius + 4f, topRadius, paint)
+
+            // Draw the bottom triangle/point
+            val trianglePath = android.graphics.Path()
+            trianglePath.moveTo(centerX, bottomY)
+            trianglePath.lineTo(centerX - 12f, topRadius + 12f)
+            trianglePath.lineTo(centerX + 12f, topRadius + 12f)
+            trianglePath.close()
+            canvas.drawPath(trianglePath, paint)
+
+            // Draw white circle in center (the hole)
+            paint.color = android.graphics.Color.WHITE
+            canvas.drawCircle(centerX, topRadius + 4f, 6f, paint)
+
+            markerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmap)
+            markersReady = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Fallback to default marker if custom marker creation fails
+            markerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
+                if (hydrant.serviceStatus == "In Service")
+                    com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_GREEN
+                else
+                    com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_RED
+            )
+            markersReady = true
         }
+    }
 
-        val centerX = width / 2f
-        val topRadius = 14f
-        val bottomY = height - 4f
-
-        // Draw filled circle for the main body
-        canvas.drawCircle(centerX, topRadius + 4f, topRadius, paint)
-
-        // Draw the bottom triangle/point
-        val trianglePath = android.graphics.Path()
-        trianglePath.moveTo(centerX, bottomY)
-        trianglePath.lineTo(centerX - 12f, topRadius + 12f)
-        trianglePath.lineTo(centerX + 12f, topRadius + 12f)
-        trianglePath.close()
-        canvas.drawPath(trianglePath, paint)
-
-        // Draw white circle in center (the hole)
-        paint.color = android.graphics.Color.WHITE
-        canvas.drawCircle(centerX, topRadius + 4f, 6f, paint)
-
-        com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmap)
+    // Delay showing the map to ensure proper initialization
+    LaunchedEffect(Unit) {
+        try {
+            // Initialize MapsInitializer
+            com.google.android.gms.maps.MapsInitializer.initialize(
+                context,
+                com.google.android.gms.maps.MapsInitializer.Renderer.LATEST
+            ) { }
+            kotlinx.coroutines.delay(500)
+            isMapReady = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            kotlinx.coroutines.delay(500)
+            isMapReady = true
+        }
     }
 
     // Show snackbar if coordinates are invalid
@@ -4639,111 +4795,158 @@ fun ViewHydrantLocationScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            GoogleMap(
-                modifier = Modifier.fillMaxSize(),
-                cameraPositionState = cameraPositionState,
-                uiSettings = MapUiSettings(
-                    zoomControlsEnabled = false,
-                    myLocationButtonEnabled = false
-                )
-            ) {
-                // Add marker for the hydrant
-                if (hasValidCoordinates) {
-                    com.google.maps.android.compose.Marker(
-                        state = com.google.maps.android.compose.MarkerState(
-                            position = hydrantLocation
+            when {
+                !isMapReady -> {
+                    // Show loading indicator while map initializes
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFFF5F5F5)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(
+                                color = Color(0xFFEF5350)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Loading map...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    GoogleMap(
+                        modifier = Modifier.fillMaxSize(),
+                        cameraPositionState = cameraPositionState,
+                        uiSettings = MapUiSettings(
+                            zoomControlsEnabled = false,
+                            myLocationButtonEnabled = false
                         ),
-                        title = "Hydrant ${hydrant.id}",
-                        snippet = "${hydrant.hydrantName} - ${hydrant.serviceStatus}",
-                        icon = markerIcon
-                    )
+                        properties = MapProperties(
+                            isMyLocationEnabled = false
+                        ),
+                        onMapLoaded = {
+                            mapLoaded = true
+                        }
+                    ) {
+                        // Only show marker if it's ready and coordinates are valid
+                        if (hasValidCoordinates && markersReady && markerIcon != null) {
+                            com.google.maps.android.compose.Marker(
+                                state = com.google.maps.android.compose.MarkerState(
+                                    position = hydrantLocation
+                                ),
+                                title = "Hydrant ${hydrant.id}",
+                                snippet = "${hydrant.hydrantName} - ${hydrant.serviceStatus}",
+                                icon = markerIcon!!
+                            )
+                        }
+                    }
                 }
             }
 
-            // Custom zoom controls - same style as Home page
-            Column(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 12.dp),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // Location pin button - reset to hydrant location
-                FloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            cameraPositionState.animate(
-                                CameraUpdateFactory.newLatLngZoom(hydrantLocation, 17f)
-                            )
-                        }
-                    },
-                    modifier = Modifier.size(36.dp),
-                    containerColor = Color.White,
-                    contentColor = Color(0xFF5F6368),
-                    elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 3.dp,
-                        pressedElevation = 5.dp
-                    ),
-                    shape = MaterialTheme.shapes.small
+            // Custom zoom controls - only show after map is loaded
+            if (mapLoaded) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 12.dp),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = "Reset View",
-                        modifier = Modifier.size(18.dp),
-                        tint = Color(0xFF5F6368)
-                    )
-                }
+                    // Location pin button - reset to hydrant location
+                    FloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.newLatLngZoom(hydrantLocation, 17f)
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(36.dp),
+                        containerColor = Color.White,
+                        contentColor = Color(0xFF5F6368),
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 3.dp,
+                            pressedElevation = 5.dp
+                        ),
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOn,
+                            contentDescription = "Reset View",
+                            modifier = Modifier.size(18.dp),
+                            tint = Color(0xFF5F6368)
+                        )
+                    }
 
-                // Zoom in button
-                FloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            val currentZoom = cameraPositionState.position.zoom
-                            cameraPositionState.animate(
-                                CameraUpdateFactory.zoomTo(currentZoom + 1f)
-                            )
-                        }
-                    },
-                    modifier = Modifier.size(36.dp),
-                    containerColor = Color.White,
-                    contentColor = Color(0xFF5F6368),
-                    elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 3.dp,
-                        pressedElevation = 5.dp
-                    ),
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(
-                        text = "+",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color(0xFF5F6368)
-                    )
-                }
+                    // Zoom in button
+                    FloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    val currentZoom = cameraPositionState.position.zoom
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.zoomTo(currentZoom + 1f)
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(36.dp),
+                        containerColor = Color.White,
+                        contentColor = Color(0xFF5F6368),
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 3.dp,
+                            pressedElevation = 5.dp
+                        ),
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = "+",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color(0xFF5F6368)
+                        )
+                    }
 
-                // Zoom out button
-                FloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            val currentZoom = cameraPositionState.position.zoom
-                            cameraPositionState.animate(
-                                CameraUpdateFactory.zoomTo(currentZoom - 1f)
-                            )
-                        }
-                    },
-                    modifier = Modifier.size(36.dp),
-                    containerColor = Color.White,
-                    contentColor = Color(0xFF5F6368),
-                    elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 3.dp,
-                        pressedElevation = 5.dp
-                    ),
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(
-                        text = "−",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color(0xFF5F6368)
-                    )
+                    // Zoom out button
+                    FloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    val currentZoom = cameraPositionState.position.zoom
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.zoomTo(currentZoom - 1f)
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(36.dp),
+                        containerColor = Color.White,
+                        contentColor = Color(0xFF5F6368),
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 3.dp,
+                            pressedElevation = 5.dp
+                        ),
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = "−",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color(0xFF5F6368)
+                        )
+                    }
                 }
             }
 
@@ -4812,6 +5015,20 @@ fun ViewHydrantLocationScreen(
                     }
                 }
             }
+
+            // Show loading overlay if markers aren't ready yet
+            if (!markersReady) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.White.copy(alpha = 0.3f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = Color(0xFFEF5350)
+                    )
+                }
+            }
         }
     }
 }
@@ -4821,7 +5038,8 @@ fun ViewHydrantLocationScreen(
 fun MapScreen(
     modifier: Modifier = Modifier,
     initialIncidentLocation: Pair<Double, Double>? = null,
-    onIncidentHandled: () -> Unit = {}
+    onIncidentHandled: () -> Unit = {},
+            onMailClick: () -> Unit = {}  // ADD THIS PARAMETER
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val lagunaLake = LatLng(14.3500, 121.2500)
@@ -5280,9 +5498,60 @@ fun MapScreen(
         // Menu Button
         FloatingActionButton(onClick = { isDrawerOpen = true }, modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 12.dp).statusBarsPadding().size(40.dp), containerColor = Color.White, contentColor = Color(0xFF5F6368), elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp), shape = RoundedCornerShape(8.dp)) { Text("≡", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF5F6368), fontWeight = FontWeight.Bold) }
 
-        // Emergency Button
-        Button(onClick = { showEmergencyDialog = true }, modifier = Modifier.align(Alignment.TopEnd).padding(end = 12.dp, top = 12.dp).statusBarsPadding().height(40.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)), shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 12.dp), elevation = ButtonDefaults.buttonElevation(defaultElevation = 3.dp)) {
-            Icon(Icons.Default.Warning, null, tint = Color.White, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Emergency", color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+        // Emergency Button and Mail Button Row
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = 12.dp, top = 12.dp)
+                .statusBarsPadding(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            /// Mail Button
+            Button(
+                onClick = onMailClick,  // Changed from Toast to callback
+                modifier = Modifier.height(40.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2196F3)
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 3.dp)
+            ) {
+                Text("✉️", fontSize = 18.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Mail",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // Emergency Button
+            Button(
+                onClick = { showEmergencyDialog = true },
+                modifier = Modifier.height(40.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFD32F2F)
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 3.dp)
+            ) {
+                Icon(
+                    Icons.Default.Warning,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Emergency",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         // Zoom Controls
@@ -5397,6 +5666,591 @@ fun MapScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FireIncidentReportsScreen(
+    onBack: () -> Unit,
+    onViewOnMap: (Double, Double) -> Unit = { _, _ -> }
+) {
+    val firestore = Firebase.firestore
+    val auth = FirebaseAuth.getInstance()
+    val userEmail = auth.currentUser?.email ?: ""
+
+    var reports by remember { mutableStateOf<List<FireIncidentReport>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var selectedTab by remember { mutableStateOf(0) }
+    var isAdmin by remember { mutableStateOf(false) }
+    var showReportDetailDialog by remember { mutableStateOf(false) }
+    var selectedReport by remember { mutableStateOf<FireIncidentReport?>(null) }
+
+    // Check if user is admin
+    LaunchedEffect(userEmail) {
+        if (userEmail.isNotEmpty()) {
+            firestore.collection("admins")
+                .document(userEmail.lowercase())
+                .get()
+                .addOnSuccessListener { document ->
+                    isAdmin = document.exists()
+                }
+        }
+    }
+
+    // Load fire incident reports
+    LaunchedEffect(Unit) {
+        firestore.collection("fire_incident_reports")
+            .orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    isLoading = false
+                    return@addSnapshotListener
+                }
+
+                val reportsList = snapshot?.documents?.mapNotNull { doc ->
+                    FireIncidentReport(
+                        documentId = doc.id,
+                        reporterName = doc.getString("reporterName") ?: "",
+                        reporterContact = doc.getString("reporterContact") ?: "",
+                        reporterEmail = doc.getString("reporterEmail") ?: "",
+                        reporterCurrentLocation = doc.getString("reporterCurrentLocation") ?: "",
+                        incidentLocation = doc.getString("incidentLocation") ?: "",
+                        description = doc.getString("description") ?: "",
+                        timestamp = doc.getTimestamp("timestamp"),
+                        status = doc.getString("status") ?: "pending"
+                    )
+                } ?: emptyList()
+
+                reports = reportsList
+                isLoading = false
+            }
+    }
+
+    val filteredReports = when (selectedTab) {
+        1 -> reports.filter { it.status == "pending" }
+        2 -> reports.filter { it.status == "acknowledged" }
+        3 -> reports.filter { it.status == "resolved" }
+        else -> reports
+    }
+
+    if (showReportDetailDialog && selectedReport != null) {
+        FireIncidentReportDetailDialog(
+            report = selectedReport!!,
+            isAdmin = isAdmin,
+            onDismiss = {
+                showReportDetailDialog = false
+                selectedReport = null
+            },
+            onStatusChange = { newStatus ->
+                firestore.collection("fire_incident_reports")
+                    .document(selectedReport!!.documentId)
+                    .update("status", newStatus)
+                    .addOnSuccessListener {
+                        showReportDetailDialog = false
+                        selectedReport = null
+                    }
+            },
+            onViewOnMap = { lat, lng ->
+                showReportDetailDialog = false
+                selectedReport = null
+                onViewOnMap(lat, lng)
+            }
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Fire Incident Reports",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF2196F3)
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFFF5F5F5))
+                .padding(padding)
+        ) {
+            // Tab Row
+            ScrollableTabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = Color.White,
+                contentColor = Color(0xFF2196F3),
+                edgePadding = 16.dp
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("All")
+                            if (reports.isNotEmpty()) {
+                                Spacer(Modifier.width(4.dp))
+                                Badge { Text("${reports.size}") }
+                            }
+                        }
+                    }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🔴 Pending")
+                            val count = reports.count { it.status == "pending" }
+                            if (count > 0) {
+                                Spacer(Modifier.width(4.dp))
+                                Badge(containerColor = Color(0xFFD32F2F)) {
+                                    Text("$count", color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🟡 Acknowledged")
+                            val count = reports.count { it.status == "acknowledged" }
+                            if (count > 0) {
+                                Spacer(Modifier.width(4.dp))
+                                Badge(containerColor = Color(0xFFFFA000)) {
+                                    Text("$count", color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                )
+                Tab(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🟢 Resolved")
+                            val count = reports.count { it.status == "resolved" }
+                            if (count > 0) {
+                                Spacer(Modifier.width(4.dp))
+                                Badge(containerColor = Color(0xFF4CAF50)) {
+                                    Text("$count", color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (isLoading) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = Color(0xFF2196F3))
+                }
+            } else if (filteredReports.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("📭", fontSize = 64.sp)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = when (selectedTab) {
+                                1 -> "No pending reports"
+                                2 -> "No acknowledged reports"
+                                3 -> "No resolved reports"
+                                else -> "No fire incident reports"
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(filteredReports) { report ->
+                        FireIncidentReportCard(
+                            report = report,
+                            onClick = {
+                                selectedReport = report
+                                showReportDetailDialog = true
+                            }
+                        )
+                    }
+                    item { Spacer(modifier = Modifier.height(16.dp)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FireIncidentReportCard(
+    report: FireIncidentReport,
+    onClick: () -> Unit
+) {
+    val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy 'at' hh:mm a", java.util.Locale.getDefault())
+    val formattedTime = report.timestamp?.toDate()?.let { dateFormat.format(it) } ?: "Unknown time"
+
+    val statusColor = when (report.status) {
+        "pending" -> Color(0xFFD32F2F)
+        "acknowledged" -> Color(0xFFFFA000)
+        "resolved" -> Color(0xFF4CAF50)
+        else -> Color.Gray
+    }
+
+    val statusEmoji = when (report.status) {
+        "pending" -> "🔴"
+        "acknowledged" -> "🟡"
+        "resolved" -> "🟢"
+        else -> "⚪"
+    }
+
+    val statusBgColor = when (report.status) {
+        "pending" -> Color(0xFFFFEBEE)
+        "acknowledged" -> Color(0xFFFFF8E1)
+        "resolved" -> Color(0xFFE8F5E9)
+        else -> Color(0xFFF5F5F5)
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = statusBgColor,
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(statusEmoji, fontSize = 12.sp)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = report.status.replaceFirstChar { it.uppercase() },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = statusColor
+                        )
+                    }
+                }
+
+                Text(
+                    text = formattedTime,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(verticalAlignment = Alignment.Top) {
+                Text("🔥", fontSize = 24.sp)
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Fire Incident Location",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                    Text(
+                        text = report.incidentLocation,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("👤", fontSize = 16.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Reported by: ${report.reporterName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF666666)
+                )
+            }
+
+            if (report.description.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = report.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onClick) {
+                    Text("View Details", color = Color(0xFF2196F3))
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Color(0xFF2196F3),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FireIncidentReportDetailDialog(
+    report: FireIncidentReport,
+    isAdmin: Boolean,
+    onDismiss: () -> Unit,
+    onStatusChange: (String) -> Unit,
+    onViewOnMap: (Double, Double) -> Unit
+) {
+    val dateFormat = java.text.SimpleDateFormat("MMMM dd, yyyy 'at' hh:mm a", java.util.Locale.getDefault())
+    val formattedTime = report.timestamp?.toDate()?.let { dateFormat.format(it) } ?: "Unknown time"
+
+    val statusColor = when (report.status) {
+        "pending" -> Color(0xFFD32F2F)
+        "acknowledged" -> Color(0xFFFFA000)
+        "resolved" -> Color(0xFF4CAF50)
+        else -> Color.Gray
+    }
+
+    val coordinates = report.reporterCurrentLocation.let {
+        try {
+            val regex = """Lat:\s*([-\d.]+),\s*Lng:\s*([-\d.]+)""".toRegex()
+            val match = regex.find(it)
+            if (match != null) {
+                Pair(match.groupValues[1].toDouble(), match.groupValues[2].toDouble())
+            } else null
+        } catch (e: Exception) { null }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🔥", fontSize = 28.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Fire Incident Report",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD32F2F)
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = formattedTime,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Status
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = when (report.status) {
+                        "pending" -> Color(0xFFFFEBEE)
+                        "acknowledged" -> Color(0xFFFFF8E1)
+                        "resolved" -> Color(0xFFE8F5E9)
+                        else -> Color(0xFFF5F5F5)
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Status:", fontWeight = FontWeight.Bold)
+                        Surface(
+                            color = statusColor,
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            Text(
+                                text = report.status.replaceFirstChar { it.uppercase() },
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // Reporter Info
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFFE3F2FD),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("👤 Reporter Information", fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
+                        Spacer(Modifier.height(8.dp))
+                        Text("Name: ${report.reporterName}")
+                        Text("Contact: ${report.reporterContact}")
+                        Text("Email: ${report.reporterEmail}", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+
+                // Reporter Location
+                if (report.reporterCurrentLocation.isNotEmpty()) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFE8F5E9),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("📍 Reporter's Location", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                            Spacer(Modifier.height(4.dp))
+                            Text(report.reporterCurrentLocation)
+                        }
+                    }
+                }
+
+                // Fire Location
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFFFFEBEE),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("🔥 Fire Incident Location", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F))
+                        Spacer(Modifier.height(4.dp))
+                        Text(report.incidentLocation, fontWeight = FontWeight.Medium)
+                    }
+                }
+
+                // Description
+                if (report.description.isNotEmpty()) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFF8E1),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("📝 Description", fontWeight = FontWeight.Bold, color = Color(0xFFF57C00))
+                            Spacer(Modifier.height(4.dp))
+                            Text(report.description)
+                        }
+                    }
+                }
+
+                // Admin Actions
+                if (isAdmin && report.status != "resolved") {
+                    HorizontalDivider(color = Color(0xFFE0E0E0))
+                    Text("Admin Actions", fontWeight = FontWeight.Bold, color = Color(0xFF666666))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (report.status == "pending") {
+                            Button(
+                                onClick = { onStatusChange("acknowledged") },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFA000))
+                            ) {
+                                Text("Acknowledge", fontSize = 12.sp)
+                            }
+                        }
+
+                        Button(
+                            onClick = { onStatusChange("resolved") },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                        ) {
+                            Text("Mark Resolved", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (coordinates != null) {
+                    Button(
+                        onClick = { onViewOnMap(coordinates.first, coordinates.second) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                    ) {
+                        Icon(Icons.Default.LocationOn, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("View on Map")
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Close")
+                }
+            }
+        },
+        dismissButton = null,
+        containerColor = Color.White
+    )
+}
+
 fun checkLocationPermission(context: android.content.Context): Boolean {
     return androidx.core.content.ContextCompat.checkSelfPermission(
         context,
@@ -5428,12 +6282,18 @@ fun getCurrentLocation(
     }
 }
 
+// =====================================================
+// UPDATED FavoritesScreen (Home) Header (around line 2600)
+// =====================================================
 @Composable
 fun FavoritesScreen(
     modifier: Modifier = Modifier,
     scrollState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.foundation.lazy.rememberLazyListState(),
     onMunicipalityClick: (String) -> Unit
 ) {
+    val hydrantViewModel: FireHydrantViewModel = viewModel()
+    val hydrantUiState by hydrantViewModel.uiState.collectAsState()
+
     val municipalities = listOf(
         "Alaminos", "Bay", "Biñan", "Cabuyao", "Calamba", "Calauan",
         "Cavinti", "Famy", "Kalayaan", "Liliw", "Los Baños", "Luisiana",
@@ -5441,11 +6301,16 @@ fun FavoritesScreen(
         "Pagsanjan", "Pakil", "Pangil", "Pila", "Rizal", "San Pablo", "San Pedro",
         "Santa Cruz", "Santa Maria", "Santa Rosa", "Siniloan", "Victoria"
     )
-    // Search state
+
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var isSearchActive by rememberSaveable { mutableStateOf(false) }
 
-    // Filter municipalities - only show those that START with the search query
+    LaunchedEffect(Unit) {
+        hydrantViewModel.loadAllHydrants()
+    }
+
+    val totalHydrants = hydrantUiState.allHydrants.size
+
     val filteredMunicipalities = if (searchQuery.isEmpty()) {
         municipalities
     } else {
@@ -5460,16 +6325,16 @@ fun FavoritesScreen(
             .fillMaxSize()
             .background(Color(0xFFF5F5F5))
     ) {
-        // Header with title and search button
+        // ✅ REDUCED Header with logo, title and search button
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xFFFF6B35))
                 .systemBarsPadding()
-                .padding(16.dp)
+                .padding(horizontal = 14.dp)  // ✅ Reduced from 16dp
+                .padding(bottom = 10.dp)       // ✅ Reduced from 12dp
         ) {
             if (isSearchActive) {
-                // Search TextField
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -5508,36 +6373,91 @@ fun FavoritesScreen(
                     )
                 )
             } else {
-                // Title with search button
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Laguna Municipalities",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),  // ✅ Reduced from 12dp
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        // ✅ REDUCED Laguna Logo
+                        Image(
+                            painter = painterResource(id = R.drawable.laguna_logo),
+                            contentDescription = "Laguna Logo",
+                            modifier = Modifier.size(68.dp)  // ✅ Reduced from 80dp
+                        )
 
+                        Column {
+                            Text(
+                                text = "Laguna",
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontSize = 28.sp,  // ✅ Slightly reduced
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Municipalities",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontSize = 16.sp,  // ✅ Slightly reduced
+                                color = Color.White,
+                                fontWeight = FontWeight.Normal
+                            )
+
+                            Spacer(modifier = Modifier.height(3.dp))  // ✅ Reduced from 4dp
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color.White
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),  // ✅ Reduced padding
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (hydrantUiState.isLoading) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),  // ✅ Reduced from 16dp
+                                            strokeWidth = 2.dp,
+                                            color = Color(0xFFFF6B35)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))  // ✅ Reduced from 8dp
+                                        Text(
+                                            text = "Loading...",
+                                            style = MaterialTheme.typography.bodySmall,  // ✅ Reduced size
+                                            color = Color.Black
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "Total Hydrant : $totalHydrants",
+                                            style = MaterialTheme.typography.bodySmall,  // ✅ Reduced size
+                                            color = Color.Black
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ✅ REDUCED Search button
                     IconButton(
                         onClick = { isSearchActive = true },
                         modifier = Modifier
-                            .size(48.dp)
-                            .background(Color.White, shape = RoundedCornerShape(8.dp))
+                            .size(50.dp)  // ✅ Reduced from 56dp
+                            .background(Color.White, shape = RoundedCornerShape(10.dp))  // ✅ Reduced corner radius
                     ) {
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = "Search",
-                            tint = Color(0xFFFF6B35)
+                            tint = Color(0xFFFF6B35),
+                            modifier = Modifier.size(26.dp)  // ✅ Reduced from 28dp
                         )
                     }
                 }
             }
         }
 
-        // Municipality list
+        // Municipality list remains the same...
         if (filteredMunicipalities.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -5569,6 +6489,41 @@ fun FavoritesScreen(
 
 @Composable
 fun MunicipalityButton(name: String, onClick: () -> Unit) {
+    // Get drawable resource ID for municipality logo if it exists
+    val logoResId = when (name) {
+        "Alaminos" -> R.drawable.alaminos_logo
+        "Bay" -> R.drawable.bay_logo
+        "Biñan" -> R.drawable.binan_logo
+        "Cabuyao" -> R.drawable.cabuyao_logo
+        "Calamba" -> R.drawable.calamba_logo
+        "Calauan" -> R.drawable.calauan_logo
+        "Cavinti" -> R.drawable.cavinti_logo
+        "Famy" -> R.drawable.famy_logo
+        "Kalayaan" -> R.drawable.kalayaan_logo
+        "Liliw" -> R.drawable.liliw_logo
+        "Los Baños" -> R.drawable.los_banos_logo
+        "Luisiana" -> R.drawable.luisiana_logo
+        "Lumban" -> R.drawable.lumban_logo
+        "Mabitac" -> R.drawable.mabitac_logo
+        "Magdalena" -> R.drawable.magdalena_logo
+        "Majayjay" -> R.drawable.majayjay_logo
+        "Nagcarlan" -> R.drawable.nagcarlan_logo
+        "Paete" -> R.drawable.paete_logo
+        "Pagsanjan" -> R.drawable.pagsanjan_logo
+        "Pakil" -> R.drawable.pakil_logo
+        "Pangil" -> R.drawable.pangil_logo
+        "Pila" -> R.drawable.pila_logo
+        "Rizal" -> R.drawable.rizal_logo
+        "San Pablo" -> R.drawable.san_pablo_logo
+        "San Pedro" -> R.drawable.san_pedro_logo
+        "Santa Cruz" -> R.drawable.santa_cruz_logo
+        "Santa Maria" -> R.drawable.santa_maria_logo
+        "Santa Rosa" -> R.drawable.santa_rosa_logo
+        "Siniloan" -> R.drawable.siniloan_logo
+        "Victoria" -> R.drawable.victoria_logo
+        else -> null
+    }
+
     Surface(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -5583,12 +6538,26 @@ fun MunicipalityButton(name: String, onClick: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = Color(0xFF212121),
-                fontWeight = FontWeight.Medium
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Show logo if available
+                if (logoResId != null) {
+                    Image(
+                        painter = painterResource(id = logoResId),
+                        contentDescription = "$name Logo",
+                        modifier = Modifier.size(40.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color(0xFF212121),
+                    fontWeight = FontWeight.Medium
+                )
+            }
             Icon(
                 imageVector = Icons.Default.KeyboardArrowRight,
                 contentDescription = "View $name",
@@ -5621,7 +6590,6 @@ fun ProfileScreen(
     var isAdmin by remember { mutableStateOf(false) }
     var isCheckingAdmin by remember { mutableStateOf(true) }
 
-    // ✅ Check if user is admin
     LaunchedEffect(userEmail) {
         firestore.collection("admins")
             .document(userEmail.lowercase())
@@ -5648,7 +6616,7 @@ fun ProfileScreen(
             .background(Color(0xFFF5F5F5))
             .verticalScroll(rememberScrollState())
     ) {
-        // Header with profile info
+        // ✅ REDUCED Header with profile info
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -5657,14 +6625,15 @@ fun ProfileScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp)
-                    .systemBarsPadding(),
+                    .padding(horizontal = 20.dp)  // ✅ Reduced from 24dp
+                    .padding(bottom = 12.dp)       // ✅ Reduced from 16dp
+                    .statusBarsPadding(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Start
             ) {
                 Box(
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(56.dp)  // ✅ Reduced from 64dp
                         .clip(CircleShape)
                         .background(Color.White),
                     contentAlignment = Alignment.Center
@@ -5672,45 +6641,44 @@ fun ProfileScreen(
                     Text(
                         text = initials,
                         style = MaterialTheme.typography.headlineSmall,
+                        fontSize = 22.sp,  // ✅ Slightly reduced font
                         color = Color(0xFFFF6B35),
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(12.dp))  // ✅ Reduced from 16dp
 
                 Column {
                     Text(
                         text = userName,
                         style = MaterialTheme.typography.headlineSmall,
+                        fontSize = 22.sp,  // ✅ Slightly reduced font
                         color = Color.White,
                         fontWeight = FontWeight.Bold
                     )
 
-                    // ✅ Only show badge if user is admin (nothing shown for ordinary users)
                     if (isCheckingAdmin) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        // Show loading indicator while checking
+                        Spacer(modifier = Modifier.height(6.dp))  // ✅ Reduced from 8dp
                         CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
+                            modifier = Modifier.size(20.dp),  // ✅ Reduced from 24dp
                             color = Color.White,
                             strokeWidth = 2.dp
                         )
                     } else if (isAdmin) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        // ✅ Show Admin Badge (only for admins)
+                        Spacer(modifier = Modifier.height(6.dp))  // ✅ Reduced from 8dp
                         Surface(
                             modifier = Modifier.wrapContentWidth(),
                             color = Color.White,
                             shape = MaterialTheme.shapes.small
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),  // ✅ Reduced from 12dp
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = "✓",
-                                    style = MaterialTheme.typography.bodyLarge,
+                                    style = MaterialTheme.typography.bodyMedium,  // ✅ Reduced size
                                     color = Color(0xFF4CAF50),
                                     fontWeight = FontWeight.Bold
                                 )
@@ -5724,12 +6692,11 @@ fun ProfileScreen(
                             }
                         }
                     }
-                    // ✅ For ordinary users: nothing is shown below the name (no button, no badge)
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))  // ✅ Reduced from 16dp
 
         // All menu items in one card
         Surface(
@@ -8336,6 +9303,8 @@ fun FireIncidentAlertDialog(
     onAcknowledge: () -> Unit,
     onGoToLocation: () -> Unit
 ) {
+    var isAcknowledged by remember { mutableStateOf(false) }  // Track if acknowledged
+
     val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy 'at' hh:mm a", java.util.Locale.getDefault())
     val formattedTime = incident.timestamp?.toDate()?.let { dateFormat.format(it) } ?: "Unknown time"
 
@@ -8353,6 +9322,29 @@ fun FireIncidentAlertDialog(
         },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Show "Acknowledged" badge if acknowledged
+                if (isAcknowledged) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFE8F5E9),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("✅", fontSize = 20.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "This report has been acknowledged",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2E7D32)
+                            )
+                        }
+                    }
+                }
+
                 // Reporter Info
                 Surface(Modifier.fillMaxWidth(), color = Color(0xFFE3F2FD), shape = RoundedCornerShape(8.dp)) {
                     Column(Modifier.padding(12.dp)) {
@@ -8363,6 +9355,7 @@ fun FireIncidentAlertDialog(
                         Text("Email: ${incident.reporterEmail}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                 }
+
                 // Reporter Location
                 if (incident.reporterCurrentLocation.isNotEmpty() && incident.reporterCurrentLocation != "Not provided") {
                     Surface(Modifier.fillMaxWidth(), color = Color(0xFFE8F5E9), shape = RoundedCornerShape(8.dp)) {
@@ -8373,6 +9366,7 @@ fun FireIncidentAlertDialog(
                         }
                     }
                 }
+
                 // Fire Location
                 Surface(Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
                     Column(Modifier.padding(12.dp)) {
@@ -8381,6 +9375,7 @@ fun FireIncidentAlertDialog(
                         Text(incident.incidentLocation, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                     }
                 }
+
                 // Description
                 if (incident.description.isNotEmpty()) {
                     Surface(Modifier.fillMaxWidth(), color = Color(0xFFFFF8E1), shape = RoundedCornerShape(8.dp)) {
@@ -8395,11 +9390,35 @@ fun FireIncidentAlertDialog(
         },
         confirmButton = {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onGoToLocation, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), modifier = Modifier.fillMaxWidth()) {
+                // Go to Location Button
+                Button(
+                    onClick = onGoToLocation,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Text("📍 Go to Location")
                 }
-                Button(onClick = onAcknowledge, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)), modifier = Modifier.fillMaxWidth()) {
-                    Text("✓ Acknowledge")
+
+                // Acknowledge Button - changes to "Acknowledged" after click
+                if (!isAcknowledged) {
+                    Button(
+                        onClick = {
+                            onAcknowledge()
+                            isAcknowledged = true  // Don't dismiss, just mark as acknowledged
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("✓ Acknowledge")
+                    }
+                }
+
+                // Close Button - always visible
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Close", color = Color.Gray)
                 }
             }
         },

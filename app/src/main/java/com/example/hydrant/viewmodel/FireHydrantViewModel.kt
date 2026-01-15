@@ -107,7 +107,7 @@ class FireHydrantViewModel : ViewModel() {
                     "Alaminos", "Bay", "Biñan", "Cabuyao", "Calamba", "Calauan",
                     "Cavinti", "Famy", "Kalayaan", "Liliw", "Los Baños", "Luisiana",
                     "Lumban", "Mabitac", "Magdalena", "Majayjay", "Nagcarlan", "Paete",
-                    "Pagsanjan", "Pakil", "Pangil", "Rizal", "San Pablo", "San Pedro",
+                    "Pagsanjan", "Pakil", "Pangil", "Pila", "Rizal", "San Pablo", "San Pedro",
                     "Santa Cruz", "Santa Maria", "Santa Rosa", "Siniloan", "Victoria"
                 )
 
