@@ -38,11 +38,7 @@ class FireHydrantRepository {
      * Uses 2 digits for 1-99, 3 digits for 100-999, etc.
      */
     private fun generateZeroPaddedId(number: Int): String {
-        return when {
-            number < 100 -> "Id_${number.toString().padStart(2, '0')}"   // Id_01 to Id_99
-            number < 1000 -> "Id_${number.toString().padStart(3, '0')}"  // Id_100 to Id_999
-            else -> "Id_${number.toString().padStart(4, '0')}"           // Id_1000+
-        }
+        return "Id_${number.toString().padStart(3, '0')}"  // Always 3 digits
     }
 
     /**
