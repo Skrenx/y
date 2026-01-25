@@ -82,5 +82,53 @@ class EmailSender {
                 Result.failure(e)
             }
         }
+
+        // NEW FUNCTION: Send Problem Report with User Info
+        suspend fun sendProblemReport(
+            problemType: String,
+            description: String,
+            userName: String,
+            userEmail: String
+        ): Result<Unit> = withContext(Dispatchers.IO) {
+            try {
+                val props = Properties().apply {
+                    put("mail.smtp.host", "smtp.gmail.com")
+                    put("mail.smtp.port", "587")
+                    put("mail.smtp.auth", "true")
+                    put("mail.smtp.starttls.enable", "true")
+                }
+
+                val session = Session.getInstance(props, object : Authenticator() {
+                    override fun getPasswordAuthentication(): PasswordAuthentication {
+                        return PasswordAuthentication(EMAIL, APP_PASSWORD)
+                    }
+                })
+
+                val message = MimeMessage(session).apply {
+                    setFrom(InternetAddress(EMAIL))
+                    setRecipients(Message.RecipientType.TO, InternetAddress.parse(EMAIL))
+                    subject = "Problem Report: $problemType"
+                    setText("""
+                        Problem Type: $problemType
+                        
+                        Description:
+                        $description
+                        
+                        Submitted by:
+                        Name: $userName
+                        $userEmail
+                        
+                        ---
+                        Sent from Fire Hydrant App
+                    """.trimIndent())
+                }
+
+                Transport.send(message)
+                Result.success(Unit)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Result.failure(e)
+            }
+        }
     }
 }
