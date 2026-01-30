@@ -8,12 +8,19 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 
     <!-- =====================================================
-         NEW: NOTIFICATION PERMISSIONS
+         NOTIFICATION PERMISSIONS
          ===================================================== -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- =====================================================
+         NEW: BACKGROUND LOCATION TRACKING PERMISSIONS
+         ===================================================== -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
 
     <application
         android:allowBackup="true"
@@ -47,7 +54,7 @@
             android:stopWithTask="false" />
 
         <!-- =====================================================
-             NEW: HYDRANT CHANGE LISTENER SERVICE
+             HYDRANT CHANGE LISTENER SERVICE
              Listens for hydrant changes and sends notifications to all admins
              ===================================================== -->
         <service
@@ -56,7 +63,17 @@
             android:exported="false" />
 
         <!-- =====================================================
-             NEW: FIREBASE CLOUD MESSAGING SERVICE
+             NEW: FIREFIGHTER LOCATION TRACKING SERVICE
+             Continuously tracks and shares firefighter location
+             ===================================================== -->
+        <service
+            android:name=".FirefighterLocationService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <!-- =====================================================
+             FIREBASE CLOUD MESSAGING SERVICE
              ===================================================== -->
         <service
             android:name=".FireGridMessagingService"
@@ -67,7 +84,7 @@
         </service>
 
         <!-- =====================================================
-             NEW: FCM DEFAULT NOTIFICATION SETTINGS
+             FCM DEFAULT NOTIFICATION SETTINGS
              ===================================================== -->
 
         <!-- Default notification channel (used when app is in background) -->

@@ -25,7 +25,10 @@ data class HydrantUiState(
     val error: String? = null,
     val addSuccess: Boolean = false,
     val updateSuccess: Boolean = false,
-    val deleteSuccess: Boolean = false
+    val deleteSuccess: Boolean = false,
+    // New: Store scroll position
+    val scrollIndex: Int = 0,
+    val scrollOffset: Int = 0
 )
 
 class FireHydrantViewModel : ViewModel() {
@@ -70,6 +73,26 @@ class FireHydrantViewModel : ViewModel() {
         val dateFormat = SimpleDateFormat("MMMM dd, yyyy 'at' h:mm:ss a 'UTC+8'", Locale.ENGLISH)
         dateFormat.timeZone = TimeZone.getTimeZone("Asia/Manila") // UTC+8
         return dateFormat.format(Date())
+    }
+
+    /**
+     * Save the current scroll position
+     */
+    fun saveScrollPosition(index: Int, offset: Int) {
+        _uiState.value = _uiState.value.copy(
+            scrollIndex = index,
+            scrollOffset = offset
+        )
+    }
+
+    /**
+     * Reset scroll position (optional, can be called when needed)
+     */
+    fun resetScrollPosition() {
+        _uiState.value = _uiState.value.copy(
+            scrollIndex = 0,
+            scrollOffset = 0
+        )
     }
 
     fun loadHydrants(municipality: String) {
