@@ -8033,7 +8033,7 @@ fun MapScreen(
             Card(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 120.dp, start = 16.dp, end = 16.dp)
+                    .padding(top = 60.dp, start = 16.dp, end = 16.dp)
                     .fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
@@ -8123,7 +8123,7 @@ fun MapScreen(
                         }
                     }
 
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(4.dp))
 
                     // Direction Buttons Row - Different for admin vs regular users
                     Row(
@@ -9275,9 +9275,17 @@ fun MapScreen(
                             if (currentStepIndex > 0) {
                                 OutlinedButton(
                                     onClick = { currentStepIndex-- },
-                                    shape = RoundedCornerShape(20.dp)
+                                    shape = RoundedCornerShape(20.dp),
+                                    modifier = Modifier.size(48.dp),
+                                    contentPadding = PaddingValues(0.dp),
+                                    border = BorderStroke(1.5.dp, Color(0xFF5F6368))
                                 ) {
-                                    Text("←", fontSize = 16.sp, color = Color(0xFF5F6368), fontWeight = FontWeight.Bold)
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.arrow_left),
+                                        contentDescription = "Previous step",
+                                        tint = Color(0xFF5F6368),
+                                        modifier = Modifier.size(22.dp)
+                                    )
                                 }
                             }
 
@@ -9285,9 +9293,17 @@ fun MapScreen(
                             if (steps != null && currentStepIndex < steps.size - 1) {
                                 OutlinedButton(
                                     onClick = { currentStepIndex++ },
-                                    shape = RoundedCornerShape(20.dp)
+                                    shape = RoundedCornerShape(20.dp),
+                                    modifier = Modifier.size(48.dp),
+                                    contentPadding = PaddingValues(0.dp),
+                                    border = BorderStroke(1.5.dp, Color(0xFF5F6368))
                                 ) {
-                                    Text("→", fontSize = 16.sp, color = Color(0xFF5F6368), fontWeight = FontWeight.Bold)
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.arrow_right),
+                                        contentDescription = "Next step",
+                                        tint = Color(0xFF5F6368),
+                                        modifier = Modifier.size(22.dp)
+                                    )
                                 }
                             }
 
