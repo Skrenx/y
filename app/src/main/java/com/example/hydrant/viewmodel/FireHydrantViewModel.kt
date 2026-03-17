@@ -26,9 +26,9 @@ data class HydrantUiState(
     val addSuccess: Boolean = false,
     val updateSuccess: Boolean = false,
     val deleteSuccess: Boolean = false,
-    // New: Store scroll position
     val scrollIndex: Int = 0,
-    val scrollOffset: Int = 0
+    val scrollOffset: Int = 0,
+    val lastAddedHydrantName: String = ""
 )
 
 class FireHydrantViewModel : ViewModel() {
@@ -122,6 +122,7 @@ class FireHydrantViewModel : ViewModel() {
     }
 
     fun loadAllHydrants() {
+        if (_uiState.value.allHydrants.isNotEmpty()) return  // ← Add this line
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
 
@@ -210,11 +211,12 @@ class FireHydrantViewModel : ViewModel() {
             val result = repository.addFireHydrant(hydrant)
 
             result.fold(
-                onSuccess = {
+                onSuccess = { generatedName ->
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         addSuccess = true,
-                        error = null
+                        error = null,
+                        lastAddedHydrantName = generatedName
                     )
                 },
                 onFailure = { e ->
