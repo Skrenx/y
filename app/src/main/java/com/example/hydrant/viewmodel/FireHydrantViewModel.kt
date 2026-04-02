@@ -5,7 +5,10 @@ import androidx.lifecycle.viewModelScope
 import com.example.hydrant.model.FireHydrant
 import com.example.hydrant.repository.FireHydrantRepository
 import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,6 +40,16 @@ class FireHydrantViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(HydrantUiState())
     val uiState: StateFlow<HydrantUiState> = _uiState.asStateFlow()
+
+    // Real-time listener tracking for loadHydrants (single municipality)
+    private var hydrantListener: ValueEventListener? = null
+    private var hydrantRef: DatabaseReference? = null
+
+    // Real-time listener tracking for loadAllHydrants (all municipalities)
+    private val allHydrantListeners = mutableMapOf<String, ValueEventListener>()
+    private val allHydrantRefs = mutableMapOf<String, DatabaseReference>()
+    // Cache of per-municipality hydrant lists, merged into allHydrants
+    private val allHydrantsCache = mutableMapOf<String, List<FireHydrant>>()
 
     /**
      * Helper function to extract numeric ID from hydrant ID string.
@@ -96,18 +109,42 @@ class FireHydrantViewModel : ViewModel() {
     }
 
     fun loadHydrants(municipality: String) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+        // Remove previous listener if municipality changed
+        hydrantListener?.let { hydrantRef?.removeEventListener(it) }
 
-            repository.getHydrantsByMunicipality(municipality).collect { hydrants ->
-                // Repository already sorts numerically, but we can sort again for safety
-                val sortedHydrants = hydrants.sortedBy { extractHydrantNumber(it.id) }
+        _uiState.value = _uiState.value.copy(isLoading = true)
+
+        val ref = database.getReference("fire_hydrants").child(municipality)
+        hydrantRef = ref
+
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val hydrants = snapshot.children.mapNotNull { child ->
+                    val hydrant = child.getValue(FireHydrant::class.java)
+                    if (hydrant != null && hydrant.id.isEmpty()) {
+                        hydrant.copy(id = child.key ?: "")
+                    } else {
+                        hydrant
+                    }
+                }.sortedBy { extractHydrantNumber(it.id) }
+
                 _uiState.value = _uiState.value.copy(
-                    hydrants = sortedHydrants,
-                    isLoading = false
+                    hydrants = hydrants,
+                    isLoading = false,
+                    error = null
+                )
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = error.message
                 )
             }
         }
+
+        hydrantListener = listener
+        ref.addValueEventListener(listener) // real-time: fires on every remote change
     }
 
     fun loadHydrantCounts(municipality: String) {
@@ -121,64 +158,64 @@ class FireHydrantViewModel : ViewModel() {
         }
     }
 
+    fun reloadAllHydrants() {
+        // With real-time listeners, this is now a no-op —
+        // allHydrants updates automatically via addValueEventListener.
+        // Kept for backward compatibility so MainActivity.kt call still compiles.
+    }
+
     fun loadAllHydrants() {
-        if (_uiState.value.allHydrants.isNotEmpty()) return  // ← Add this line
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+        if (allHydrantListeners.isNotEmpty()) return // already listening
 
-            try {
-                val municipalities = listOf(
-                    "Alaminos", "Bay", "Biñan", "Cabuyao", "Calamba", "Calauan",
-                    "Cavinti", "Famy", "Kalayaan", "Liliw", "Los Baños", "Luisiana",
-                    "Lumban", "Mabitac", "Magdalena", "Majayjay", "Nagcarlan", "Paete",
-                    "Pagsanjan", "Pakil", "Pangil", "Pila", "Rizal", "San Pablo", "San Pedro",
-                    "Santa Cruz", "Santa Maria", "Santa Rosa", "Siniloan", "Victoria"
-                )
+        val municipalities = listOf(
+            "Alaminos", "Bay", "Biñan", "Cabuyao", "Calamba", "Calauan",
+            "Cavinti", "Famy", "Kalayaan", "Liliw", "Los Baños", "Luisiana",
+            "Lumban", "Mabitac", "Magdalena", "Majayjay", "Nagcarlan", "Paete",
+            "Pagsanjan", "Pakil", "Pangil", "Pila", "Rizal", "San Pablo", "San Pedro",
+            "Santa Cruz", "Santa Maria", "Santa Rosa", "Siniloan", "Victoria"
+        )
 
-                val allHydrants = mutableListOf<FireHydrant>()
+        _uiState.value = _uiState.value.copy(isLoading = true)
 
-                for (municipality in municipalities) {
-                    try {
-                        val hydrantsRef = database.getReference("fire_hydrants").child(municipality)
-                        val snapshot = hydrantsRef.get().await()
+        for (municipality in municipalities) {
+            allHydrantsCache[municipality] = emptyList() // seed so municipality is always in cache
+            val ref = database.getReference("fire_hydrants").child(municipality)
+            allHydrantRefs[municipality] = ref
 
-                        if (snapshot.exists()) {
-                            for (childSnapshot in snapshot.children) {
-                                val hydrant = childSnapshot.getValue(FireHydrant::class.java)
-                                if (hydrant != null) {
-                                    val hydrantWithId = if (hydrant.id.isEmpty()) {
-                                        hydrant.copy(id = childSnapshot.key ?: "")
-                                    } else {
-                                        hydrant
-                                    }
-                                    allHydrants.add(hydrantWithId)
-                                }
-                            }
+            val listener = object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val hydrants = snapshot.children.mapNotNull { child ->
+                        val hydrant = child.getValue(FireHydrant::class.java)
+                        if (hydrant != null && hydrant.id.isEmpty()) {
+                            hydrant.copy(id = child.key ?: "")
+                        } else {
+                            hydrant
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
+                    // Update only this municipality's slice in the cache
+                    allHydrantsCache[municipality] = hydrants
+
+                    // Merge all municipalities and push to UI
+                    val merged = allHydrantsCache.values.flatten()
+                        .sortedWith(compareBy({ it.municipality }, { extractHydrantNumber(it.id) }))
+
+                    _uiState.value = _uiState.value.copy(
+                        allHydrants = merged,
+                        isLoading = false,
+                        error = null
+                    )
                 }
 
-                // Sort all hydrants by municipality first, then by numeric ID
-                val sortedAllHydrants = allHydrants.sortedWith(
-                    compareBy(
-                        { it.municipality },
-                        { extractHydrantNumber(it.id) }
+                override fun onCancelled(error: DatabaseError) {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = error.message
                     )
-                )
-
-                _uiState.value = _uiState.value.copy(
-                    allHydrants = sortedAllHydrants,
-                    isLoading = false,
-                    error = null
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = e.message ?: "Failed to load all hydrants"
-                )
+                }
             }
+
+            allHydrantListeners[municipality] = listener
+            ref.addValueEventListener(listener) // real-time per municipality
         }
     }
 
@@ -379,6 +416,18 @@ class FireHydrantViewModel : ViewModel() {
         }
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        // Clean up all real-time listeners to prevent memory leaks
+        hydrantListener?.let { hydrantRef?.removeEventListener(it) }
+        allHydrantListeners.forEach { (municipality, listener) ->
+            allHydrantRefs[municipality]?.removeEventListener(listener)
+        }
+        allHydrantListeners.clear()
+        allHydrantRefs.clear()
+        allHydrantsCache.clear()
+    }
+
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
     }
@@ -393,5 +442,12 @@ class FireHydrantViewModel : ViewModel() {
 
     fun resetDeleteSuccess() {
         _uiState.value = _uiState.value.copy(deleteSuccess = false)
+    }
+
+    fun updateLocalHydrantStatus(hydrantId: String, newStatus: String) {
+        val updatedList = _uiState.value.hydrants.map {
+            if (it.id == hydrantId) it.copy(serviceStatus = newStatus) else it
+        }
+        _uiState.value = _uiState.value.copy(hydrants = updatedList)
     }
 }

@@ -177,55 +177,15 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.platform.LocalDensity
-
-// Weather Data Classes
-data class WeatherResponse(
-    val main: Main,
-    val weather: List<Weather>,
-    val wind: Wind
-)
-
-data class ForecastResponse(
-    val list: List<ForecastItem>
-)
-
-data class ForecastItem(
-    val main: Main,
-    val weather: List<Weather>,
-    val wind: Wind,
-    val dt_txt: String
-)
-
-data class Main(
-    val temp: Double,
-    val humidity: Int,
-    val temp_min: Double,
-    val temp_max: Double
-)
-
-data class Weather(
-    val main: String,
-    val description: String
-)
-
-data class Wind(
-    val speed: Double
-)
-
-data class DailyWeather(
-    val temp: Double,
-    val tempMin: Double,
-    val tempMax: Double,
-    val humidity: Int,
-    val windSpeed: Double,
-    val condition: String
-)
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.material.icons.filled.Check
 
 data class DirectionStep(
     val instruction: String,
     val distance: String,
     val duration: String,
-    val startLocation: LatLng
+    val startLocation: LatLng,
+    val maneuver: String = ""
 )
 
 data class DirectionsResult(
@@ -365,141 +325,6 @@ val lagunaMunicipalities = listOf(
     "San Pedro", "Santa Cruz", "Santa Maria", "Santa Rosa", "Siniloan", "Victoria"
 )
 
-// Weather API Functions
-suspend fun fetchWeatherData(municipalityName: String): DailyWeather? {
-    val apiKey = "4bc22a06c908152ed3f0a3a89613b138"
-    val url = "https://api.openweathermap.org/data/2.5/forecast?q=$municipalityName,Laguna,PH&units=metric&appid=$apiKey"
-
-    return withContext(Dispatchers.IO) {
-        try {
-            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
-
-            val responseCode = connection.responseCode
-            if (responseCode == java.net.HttpURLConnection.HTTP_OK) {
-                val response = connection.inputStream.bufferedReader().use { it.readText() }
-                parseForecastJson(response)
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
-}
-
-fun parseForecastJson(json: String): DailyWeather? {
-    return try {
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
-            .format(java.util.Date())
-
-        val listPattern = """"list":\[(.*?)\]""".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val listMatch = listPattern.find(json) ?: return null
-        val listContent = listMatch.groupValues[1]
-
-        val entries = listContent.split("\"dt_txt\"").drop(1)
-
-        var minTemp = Double.MAX_VALUE
-        var maxTemp = Double.MIN_VALUE
-        var currentTemp = 0.0
-        var avgHumidity = 0
-        var avgWindSpeed = 0.0
-        var condition = "Clear"
-        var count = 0
-        var tempCount = 0
-
-        for (entry in entries) {
-            val dateRegex = """:\s*"([^"]+)"""".toRegex()
-            val dateMatch = dateRegex.find(entry)
-            val entryDate = dateMatch?.groupValues?.get(1) ?: continue
-
-            if (!entryDate.startsWith(today)) {
-                if (count > 0) break
-                continue
-            }
-
-            val tempRegex = """"temp":\s*([\d.]+)""".toRegex()
-            val tempMatches = tempRegex.findAll(entry).toList()
-
-            for (tempMatch in tempMatches) {
-                val temp = tempMatch.groupValues[1].toDoubleOrNull() ?: continue
-                minTemp = minOf(minTemp, temp)
-                maxTemp = maxOf(maxTemp, temp)
-                if (tempCount == 0) currentTemp = temp
-                tempCount++
-            }
-
-            val tempMinRegex = """"temp_min":\s*([\d.]+)""".toRegex()
-            tempMinRegex.findAll(entry).forEach { match ->
-                val tMin = match.groupValues[1].toDoubleOrNull()
-                if (tMin != null) minTemp = minOf(minTemp, tMin)
-            }
-
-            val tempMaxRegex = """"temp_max":\s*([\d.]+)""".toRegex()
-            tempMaxRegex.findAll(entry).forEach { match ->
-                val tMax = match.groupValues[1].toDoubleOrNull()
-                if (tMax != null) maxTemp = maxOf(maxTemp, tMax)
-            }
-
-            val humidityRegex = """"humidity":\s*(\d+)""".toRegex()
-            val humidity = humidityRegex.find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-
-            val windRegex = """"speed":\s*([\d.]+)""".toRegex()
-            val windSpeed = windRegex.find(entry)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
-
-            if (count == 0) {
-                val weatherRegex = """"main":\s*"([^"]+)"""".toRegex()
-                condition = weatherRegex.find(entry)?.groupValues?.get(1) ?: "Clear"
-            }
-
-            avgHumidity += humidity
-            avgWindSpeed += windSpeed
-            count++
-        }
-
-        if (count == 0 || minTemp == Double.MAX_VALUE || maxTemp == Double.MIN_VALUE) {
-            val tempRegex = """"temp":\s*([\d.]+)""".toRegex()
-            val temp = tempRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: 28.0
-
-            val tempMinRegex = """"temp_min":\s*([\d.]+)""".toRegex()
-            minTemp = tempMinRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: (temp - 3)
-
-            val tempMaxRegex = """"temp_max":\s*([\d.]+)""".toRegex()
-            maxTemp = tempMaxRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: (temp + 3)
-
-            val humidityRegex = """"humidity":\s*(\d+)""".toRegex()
-            avgHumidity = humidityRegex.find(json)?.groupValues?.get(1)?.toIntOrNull() ?: 70
-
-            val windRegex = """"speed":\s*([\d.]+)""".toRegex()
-            avgWindSpeed = windRegex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: 3.0
-
-            val weatherRegex = """"main":\s*"([^"]+)"""".toRegex()
-            condition = weatherRegex.find(json)?.groupValues?.get(1) ?: "Clear"
-
-            currentTemp = temp
-            count = 1
-        } else {
-            avgHumidity /= count
-            avgWindSpeed /= count
-        }
-
-        DailyWeather(
-            temp = if (currentTemp > 0) currentTemp else (minTemp + maxTemp) / 2,
-            tempMin = minTemp,
-            tempMax = maxTemp,
-            humidity = avgHumidity,
-            windSpeed = avgWindSpeed,
-            condition = condition
-        )
-    } catch (e: Exception) {
-        e.printStackTrace()
-        null
-    }
-}
-
 // Directions API Function
 suspend fun fetchDirections(origin: LatLng, destination: LatLng): DirectionsResult? {
     val apiKey = "AIzaSyCdwrCeDEi3tPzjg6-2lGNueLJqHJFv1ZQ"
@@ -578,6 +403,7 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
         for (i in 0 until stepsArray.length()) {
             val step = stepsArray.getJSONObject(i)
             val instruction = step.optString("html_instructions", "Continue")
+            val maneuver = step.optString("maneuver", "")
             val stepDistance = step.getJSONObject("distance").getString("text")
             val stepDuration = step.getJSONObject("duration").getString("text")
             val startLoc = step.getJSONObject("start_location")
@@ -590,7 +416,8 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
                     instruction = instruction,
                     distance = stepDistance,
                     duration = stepDuration,
-                    startLocation = startLatLng
+                    startLocation = startLatLng,
+                    maneuver = maneuver
                 )
             )
         }
@@ -599,6 +426,7 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
             val step = stepsArray.getJSONObject(i)
             val instruction = step.optString("html_instructions", "Continue")
             val stepDistance = step.getJSONObject("distance").getString("text")
+            val maneuver2 = step.optString("maneuver", "")
             val stepDuration = step.getJSONObject("duration").getString("text")
             val startLoc = step.getJSONObject("start_location")
             val startLatLng = LatLng(
@@ -611,7 +439,8 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
                     instruction = instruction,
                     distance = stepDistance,
                     duration = stepDuration,
-                    startLocation = startLatLng
+                    startLocation = startLatLng,
+                    maneuver = maneuver2
                 )
             )
         }
@@ -789,6 +618,42 @@ fun logHydrantChange(
         }
         .addOnFailureListener { e ->
             android.util.Log.e("HydrantChange", "Error logging change", e)
+        }
+}
+
+fun sendHydrantChangeNotificationToAdmins(
+    context: Context,
+    changeType: String,
+    hydrantId: String,
+    hydrantName: String,
+    municipality: String,
+    performedBy: String
+) {
+    val firestore = Firebase.firestore
+    val title = when (changeType) {
+        "added"   -> "🆕 Hydrant Added"
+        "deleted" -> "🗑️ Hydrant Deleted"
+        else      -> "✏️ Hydrant Updated"
+    }
+    val message = when (changeType) {
+        "added"   -> "$hydrantName added in $municipality by $performedBy"
+        "deleted" -> "$hydrantName deleted in $municipality by $performedBy"
+        else      -> "$hydrantName updated in $municipality by $performedBy"
+    }
+    firestore.collection("hydrant_notifications")
+        .add(hashMapOf(
+            "title"        to title,
+            "message"      to message,
+            "changeType"   to changeType,
+            "hydrantId"    to hydrantId,
+            "hydrantName"  to hydrantName,
+            "municipality" to municipality,
+            "performedBy"  to performedBy,
+            "timestamp"    to com.google.firebase.Timestamp.now(),
+            "seen"         to false
+        ))
+        .addOnFailureListener { e ->
+            android.util.Log.e("HydrantNotif", "Failed to send notification", e)
         }
 }
 
@@ -2312,7 +2177,8 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
         }
     }
 
-    NavigationSuiteScaffold(
+    Box(modifier = Modifier.fillMaxSize()) {
+        NavigationSuiteScaffold(
         navigationSuiteItems = {
             AppDestinations.entries.forEach { destination ->
                 item(
@@ -2375,30 +2241,40 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                 }
             }
         }
-    }
+        }
 
-    // ── OVERLAY SCREENS: rendered on top, MapScreen stays alive underneath ──
-    when {
-        showHelpFaqScreen -> {
-            BackHandler { showHelpFaqScreen = false }
-            HelpFaqScreen(onBack = { showHelpFaqScreen = false })
-        }
-        showContactSupportScreen -> {
-            BackHandler { showContactSupportScreen = false }
-            ContactSupportScreen(onBack = { showContactSupportScreen = false })
-        }
-        showReportProblemScreen -> {
-            BackHandler { showReportProblemScreen = false }
-            ReportProblemScreen(onBack = { showReportProblemScreen = false })
-        }
-        showAboutAppScreen -> {
-            BackHandler { showAboutAppScreen = false }
-            AboutAppScreen(onBack = { showAboutAppScreen = false })
-        }
-        showTermsPrivacyScreen -> {
-            BackHandler { showTermsPrivacyScreen = false }
-            TermsPrivacyScreen(onBack = { showTermsPrivacyScreen = false })
-        }
+        // ── OVERLAY SCREENS: rendered on top, MapScreen stays alive underneath ──
+        when {
+            showHelpFaqScreen -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    BackHandler { showHelpFaqScreen = false }
+                    HelpFaqScreen(onBack = { showHelpFaqScreen = false })
+                }
+            }
+            showContactSupportScreen -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    BackHandler { showContactSupportScreen = false }
+                    ContactSupportScreen(onBack = { showContactSupportScreen = false })
+                }
+            }
+            showReportProblemScreen -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    BackHandler { showReportProblemScreen = false }
+                    ReportProblemScreen(onBack = { showReportProblemScreen = false })
+                }
+            }
+            showAboutAppScreen -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    BackHandler { showAboutAppScreen = false }
+                    AboutAppScreen(onBack = { showAboutAppScreen = false })
+                }
+            }
+            showTermsPrivacyScreen -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    BackHandler { showTermsPrivacyScreen = false }
+                    TermsPrivacyScreen(onBack = { showTermsPrivacyScreen = false })
+                }
+            }
         showAddAdminScreen -> {
             BackHandler {
                 showAddAdminScreen = false
@@ -2558,6 +2434,7 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
             )
         }
     }
+} // closes root Box
 }
 
 
@@ -2835,7 +2712,8 @@ fun FireHydrantListScreen(
 
                                 DropdownMenu(
                                     expanded = filterExpanded,
-                                    onDismissRequest = { filterExpanded = false }
+                                    onDismissRequest = { filterExpanded = false },
+                                    properties = PopupProperties(focusable = true, clippingEnabled = false)
                                 ) {
                                     FilterDropdownContent()
                                 }
@@ -2914,7 +2792,8 @@ fun FireHydrantListScreen(
 
                         DropdownMenu(
                             expanded = filterExpanded,
-                            onDismissRequest = { filterExpanded = false }
+                            onDismissRequest = { filterExpanded = false },
+                            properties = PopupProperties(focusable = true, clippingEnabled = false)
                         ) {
                             FilterDropdownContent()
                         }
@@ -3159,8 +3038,11 @@ fun FireHydrantCard(
                 )
 
                 Surface(
-                    color = if (hydrant.serviceStatus == "In Service")
-                        Color(0xFF81C784) else Color(0xFFEF5350),
+                    color = when (hydrant.serviceStatus) {
+                        "In Service" -> Color(0xFF81C784)
+                        "Occupied" -> Color(0xFFFF9800)
+                        else -> Color(0xFFEF5350)
+                    },
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
@@ -3486,6 +3368,15 @@ fun EditFireHydrantScreen(
                 }
             )
 
+            sendHydrantChangeNotificationToAdmins(
+                context = context,
+                changeType = "updated",
+                hydrantId = hydrant.id,
+                hydrantName = hydrant.hydrantName,
+                municipality = hydrant.municipality,
+                performedBy = currentUserEmail
+            )
+
             snackbarHostState.showSnackbar("Fire hydrant updated successfully!")
             hydrantViewModel.resetUpdateSuccess()
             isUpdating = false
@@ -3508,6 +3399,15 @@ fun EditFireHydrantScreen(
                 typeColor = hydrant.typeColor,
                 newStatus = hydrant.serviceStatus,
                 remarks = hydrant.remarks,
+                municipality = hydrant.municipality,
+                performedBy = currentUserEmail
+            )
+
+            sendHydrantChangeNotificationToAdmins(
+                context = context,
+                changeType = "deleted",
+                hydrantId = hydrant.id,
+                hydrantName = hydrant.hydrantName,
                 municipality = hydrant.municipality,
                 performedBy = currentUserEmail
             )
@@ -3958,6 +3858,16 @@ fun AddFireHydrantScreen(
                 municipality = municipalityName,
                 performedBy = currentUserEmail
             )
+
+            sendHydrantChangeNotificationToAdmins(
+                context = context,
+                changeType = "added",
+                hydrantId = hydrantUiState.lastAddedHydrantName,
+                hydrantName = hydrantUiState.lastAddedHydrantName,
+                municipality = municipalityName,
+                performedBy = currentUserEmail
+            )
+
             snackbarHostState.showSnackbar("Fire hydrant added successfully!")
             hydrantViewModel.resetAddSuccess()
             isSubmitting = false
@@ -4439,6 +4349,102 @@ fun showHydrantDeletedNotification(
     }
 }
 
+fun showHydrantOccupiedNotification(
+    context: Context,
+    hydrantId: String,
+    hydrantName: String,
+    municipality: String,
+    occupiedBy: String,
+    occupiedAt: String
+) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+    }
+
+    val notifId = (hydrantId + municipality).hashCode()
+
+    // === ACKNOWLEDGE: extends 1hr before next notification ===
+    val acknowledgeIntent = Intent(context, HydrantOccupiedReceiver::class.java).apply {
+        action = "ACTION_ACKNOWLEDGE"
+        putExtra("hydrantId", hydrantId)
+        putExtra("hydrantName", hydrantName)
+        putExtra("municipality", municipality)
+        putExtra("occupiedBy", occupiedBy)
+        putExtra("notifId", notifId)
+    }
+    val acknowledgePendingIntent = PendingIntent.getBroadcast(
+        context, notifId + 1, acknowledgeIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    // === RELEASE: releases the hydrant in Firebase ===
+    val releaseIntent = Intent(context, HydrantOccupiedReceiver::class.java).apply {
+        action = "ACTION_RELEASE"
+        putExtra("hydrantId", hydrantId)
+        putExtra("hydrantName", hydrantName)
+        putExtra("municipality", municipality)
+        putExtra("notifId", notifId)
+    }
+    val releasePendingIntent = PendingIntent.getBroadcast(
+        context, notifId + 2, releaseIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val notification = NotificationCompat.Builder(context, "hydrant_updates_channel")
+        .setSmallIcon(android.R.drawable.ic_dialog_alert)
+        .setContentTitle("Hydrant Still Occupied")
+        .setContentText("$hydrantName ($municipality) has been occupied for 1 hour by $occupiedBy")
+        .setStyle(NotificationCompat.BigTextStyle()
+            .bigText("$hydrantName in $municipality has been occupied for 1 hour.\nOccupied by: $occupiedBy"))
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setAutoCancel(false)   // keep it until acted upon
+        .setOngoing(false)
+        .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+        .setVibrate(longArrayOf(0, 400, 200, 400))
+        .addAction(android.R.drawable.ic_input_add, "Acknowledge", acknowledgePendingIntent)
+        .addAction(android.R.drawable.ic_delete, "Release", releasePendingIntent)
+        .build()
+
+    with(NotificationManagerCompat.from(context)) {
+        try { notify(notifId, notification) } catch (e: SecurityException) { e.printStackTrace() }
+    }
+}
+
+fun showHydrantChangeNotification(context: Context, title: String, message: String) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+    }
+    val prefs = context.getSharedPreferences("firegrid_prefs", Context.MODE_PRIVATE)
+    if (!prefs.getBoolean("notifications_enabled", true) ||
+        !prefs.getBoolean("hydrant_updates_enabled", true)) return
+
+    val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+    }
+    val pendingIntent = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+    val notification = NotificationCompat.Builder(context, "hydrant_updates_channel")
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle(title)
+        .setContentText(message)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+        .setVibrate(longArrayOf(0, 250, 250, 250))
+        .build()
+    with(NotificationManagerCompat.from(context)) {
+        try { notify(System.currentTimeMillis().toInt(), notification) }
+        catch (e: SecurityException) { e.printStackTrace() }
+    }
+}
+
 private fun wrapText(text: String, maxWidth: Float, paint: android.graphics.Paint): List<String> {
     if (text.isEmpty()) return listOf("")
 
@@ -4591,6 +4597,7 @@ fun MunicipalityDetailScreen(
     var markersReady by remember { mutableStateOf(false) }
     var greenMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var redMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
+    var orangeMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
 
     var isAdmin by remember { mutableStateOf(false) }
     var hasAccessToMunicipality by remember { mutableStateOf(false) }
@@ -4648,8 +4655,12 @@ fun MunicipalityDetailScreen(
         }
     }
 
-    val outOfService = remember(hydrantUiState.outOfServiceCount) { hydrantUiState.outOfServiceCount }
-    val inService = remember(hydrantUiState.inServiceCount) { hydrantUiState.inServiceCount }
+    val outOfService = remember(hydrantUiState.hydrants) {
+        hydrantUiState.hydrants.count { it.serviceStatus == "Out of Service" }
+    }
+    val inService = remember(hydrantUiState.hydrants) {
+        hydrantUiState.hydrants.count { it.serviceStatus == "In Service" || it.serviceStatus == "Occupied" }
+    }
     val totalHydrants = remember(outOfService, inService) { outOfService + inService }
 
     LaunchedEffect(userEmail, municipalityName) {
@@ -5352,6 +5363,7 @@ fun MunicipalityDetailScreen(
         markersReady = false
         greenMarkerIcon = null
         redMarkerIcon = null
+        orangeMarkerIcon = null
         kotlinx.coroutines.delay(800)
         try {
             val greenBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
@@ -5386,6 +5398,22 @@ fun MunicipalityDetailScreen(
             redPaint.color = android.graphics.Color.WHITE
             redCanvas.drawCircle(centerX, topRadius + 4f, 6f, redPaint)
             redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(redBitmap)
+
+            val orangeBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+            val orangeCanvas = android.graphics.Canvas(orangeBitmap)
+            val orangePaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = android.graphics.Color.parseColor("#FF9800")
+                style = android.graphics.Paint.Style.FILL
+            }
+            orangeCanvas.drawCircle(centerX, topRadius + 4f, topRadius, orangePaint)
+            val oTriangle = android.graphics.Path().apply {
+                moveTo(centerX, bottomY); lineTo(centerX - 12f, topRadius + 12f); lineTo(centerX + 12f, topRadius + 12f); close()
+            }
+            orangeCanvas.drawPath(oTriangle, orangePaint)
+            orangePaint.color = android.graphics.Color.WHITE
+            orangeCanvas.drawCircle(centerX, topRadius + 4f, 6f, orangePaint)
+            orangeMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(orangeBitmap)
 
             markersReady = true
         } catch (e: Exception) {
@@ -5621,7 +5649,11 @@ fun MunicipalityDetailScreen(
                             hydrantsWithValidCoords.forEach { hydrant ->
                                 val lat = hydrant.latitude.toDoubleOrNull() ?: return@forEach
                                 val lng = hydrant.longitude.toDoubleOrNull() ?: return@forEach
-                                val markerIcon = if (hydrant.serviceStatus == "In Service") greenMarkerIcon!! else redMarkerIcon!!
+                                val markerIcon = when (hydrant.serviceStatus) {
+                                    "In Service" -> greenMarkerIcon!!
+                                    "Occupied" -> orangeMarkerIcon ?: redMarkerIcon!!
+                                    else -> redMarkerIcon!!
+                                }
                                 val markerState = remember(hydrant.id) {
                                     com.google.maps.android.compose.MarkerState(position = LatLng(lat, lng))
                                 }
@@ -5690,6 +5722,11 @@ fun MunicipalityDetailScreen(
                                 Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFFEF5350), modifier = Modifier.size(14.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("Out of Service", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFFFF9800), modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Occupied", style = MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
@@ -5850,25 +5887,6 @@ fun MunicipalityDetailScreen(
     }
 }
 
-
-@Composable
-fun WeatherDetail(label: String, value: String) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF999999)
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
-
 // Municipality coordinates for Laguna
 fun getMunicipalityCoordinates(municipality: String): LatLng {
     return when (municipality) {
@@ -5918,6 +5936,11 @@ fun FireHydrantMapScreen(
     val hydrantViewModel: FireHydrantViewModel = viewModel()
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
 
+    // ADD these two new state variables
+    var showOccupyConfirmDialog by remember { mutableStateOf(false) }
+    var occupyTargetHydrant by remember { mutableStateOf<FireHydrant?>(null) }
+    var isCardAdmin by remember { mutableStateOf(false) }
+    var isCardCheckingAdmin by remember { mutableStateOf(false) }
     val municipalityLocation = getMunicipalityCoordinates(municipalityName)
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(municipalityLocation, 12f)
@@ -5926,6 +5949,7 @@ fun FireHydrantMapScreen(
     var markersReady by remember { mutableStateOf(false) }
     var greenMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var redMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
+    var orangeMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
 
     // CHANGED: Added isCardVisible state
     var selectedHydrant by remember { mutableStateOf<FireHydrant?>(null) }
@@ -6069,6 +6093,25 @@ fun FireHydrantMapScreen(
             redCanvas.drawCircle(centerX, topRadius + 4f, 6f, redPaint)
             redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(redBitmap)
 
+            // Orange marker for Occupied
+            val orangeBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+            val orangeCanvas = android.graphics.Canvas(orangeBitmap)
+            val orangePaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = android.graphics.Color.parseColor("#FF9800")
+                style = android.graphics.Paint.Style.FILL
+            }
+            orangeCanvas.drawCircle(centerX, topRadius + 4f, topRadius, orangePaint)
+            val orangeTrianglePath = android.graphics.Path()
+            orangeTrianglePath.moveTo(centerX, bottomY)
+            orangeTrianglePath.lineTo(centerX - 12f, topRadius + 12f)
+            orangeTrianglePath.lineTo(centerX + 12f, topRadius + 12f)
+            orangeTrianglePath.close()
+            orangeCanvas.drawPath(orangeTrianglePath, orangePaint)
+            orangePaint.color = android.graphics.Color.WHITE
+            orangeCanvas.drawCircle(centerX, topRadius + 4f, 6f, orangePaint)
+            orangeMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(orangeBitmap)
+
             markersReady = true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -6082,13 +6125,45 @@ fun FireHydrantMapScreen(
         }
     }
 
+    LaunchedEffect(hydrantUiState.hydrants) {
+        val current = selectedHydrant ?: return@LaunchedEffect
+        val updated = hydrantUiState.hydrants.find {
+            it.id == current.id && it.municipality == current.municipality
+        }
+        if (updated != null && updated != current) {
+            selectedHydrant = updated
+        }
+    }
+
+    LaunchedEffect(selectedHydrant) {
+        val h = selectedHydrant
+        if (h == null) { isCardAdmin = false; return@LaunchedEffect }
+        val currentUser = FirebaseAuth.getInstance().currentUser
+        if (currentUser == null) { isCardAdmin = false; return@LaunchedEffect }
+        val email = currentUser.email?.lowercase() ?: run { isCardAdmin = false; return@LaunchedEffect }
+        isCardCheckingAdmin = true
+        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        db.collection("admins").document("chief_admin").collection("all").document(email).get()
+            .addOnSuccessListener { doc ->
+                if (doc.exists()) {
+                    isCardAdmin = true; isCardCheckingAdmin = false
+                } else {
+                    db.collection("admins").document("municipality_admin")
+                        .collection(h.municipality).document(email).get()
+                        .addOnSuccessListener { munDoc -> isCardAdmin = munDoc.exists(); isCardCheckingAdmin = false }
+                        .addOnFailureListener { isCardAdmin = false; isCardCheckingAdmin = false }
+                }
+            }
+            .addOnFailureListener { isCardAdmin = false; isCardCheckingAdmin = false }
+    }
+
     LaunchedEffect(municipalityName) {
         hydrantViewModel.loadHydrants(municipalityName)
     }
 
     val hydrantsWithValidCoords = hydrantUiState.hydrants.filter { hydrant ->
-        val lat = hydrant.latitude.toDoubleOrNull()
-        val lng = hydrant.longitude.toDoubleOrNull()
+        val lat = hydrant.latitude.trim().replace(",", ".").toDoubleOrNull()
+        val lng = hydrant.longitude.trim().replace(",", ".").toDoubleOrNull()
         lat != null && lng != null &&
                 lat in -90.0..90.0 &&
                 lng in -180.0..180.0 &&
@@ -6165,21 +6240,23 @@ fun FireHydrantMapScreen(
                     isCardVisible = false
                 }
             ) {
-                if (markersReady && greenMarkerIcon != null && redMarkerIcon != null) {
+                if (markersReady && greenMarkerIcon != null && redMarkerIcon != null && orangeMarkerIcon != null) {
                     hydrantsWithValidCoords.forEach { hydrant ->
-                        val lat = hydrant.latitude.toDoubleOrNull() ?: return@forEach
-                        val lng = hydrant.longitude.toDoubleOrNull() ?: return@forEach
+                        val lat = hydrant.latitude.trim().replace(",", ".").toDoubleOrNull() ?: return@forEach
+                        val lng = hydrant.longitude.trim().replace(",", ".").toDoubleOrNull() ?: return@forEach
 
-                        val markerIcon = if (hydrant.serviceStatus == "In Service") {
-                            greenMarkerIcon!!
-                        } else {
-                            redMarkerIcon!!
+                        val markerIcon = when (hydrant.serviceStatus) {
+                            "In Service" -> greenMarkerIcon!!
+                            "Occupied"   -> orangeMarkerIcon ?: redMarkerIcon!!
+                            else         -> redMarkerIcon!!
+                        }
+
+                        val markerState = remember(hydrant.id) {
+                            com.google.maps.android.compose.MarkerState(position = LatLng(lat, lng))
                         }
 
                         com.google.maps.android.compose.Marker(
-                            state = com.google.maps.android.compose.MarkerState(
-                                position = LatLng(lat, lng)
-                            ),
+                            state = markerState,
                             title = hydrant.hydrantName,
                             icon = markerIcon,
                             onClick = { _ ->
@@ -6231,6 +6308,14 @@ fun FireHydrantMapScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(text = " Out of Service", style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = Color(0xFFFF9800),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(text = " Occupied", style = MaterialTheme.typography.bodySmall)
                     }
                     if (hasInvalidCoordinates) {
                         Surface(
@@ -6334,8 +6419,11 @@ fun FireHydrantMapScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Surface(
-                                    color = if (hydrant.serviceStatus == "In Service")
-                                        Color(0xFF81C784) else Color(0xFFEF5350),
+                                    color = when (hydrant.serviceStatus) {
+                                        "In Service" -> Color(0xFF81C784)
+                                        "Occupied"   -> Color(0xFFFF9800)
+                                        else         -> Color(0xFFEF5350)
+                                    },
                                     shape = RoundedCornerShape(16.dp)
                                 ) {
                                     Text(
@@ -6459,9 +6547,166 @@ fun FireHydrantMapScreen(
                                     )
                                 }
                             }
+
+                            // Occupy / Release button row
+                            if (isCardAdmin && (hydrant.serviceStatus == "In Service" || hydrant.serviceStatus == "Occupied")) {
+                                Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp)
+                            ) {
+                                val isOccupied = hydrant.serviceStatus == "Occupied"
+                                OutlinedButton(
+                                    onClick = {
+                                        occupyTargetHydrant = hydrant
+                                        showOccupyConfirmDialog = true
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                                    ),
+                                    border = BorderStroke(1.dp, if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isOccupied) "Release Hydrant" else "Occupy Hydrant",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                                }
+                            } // closes if
                         }
                     }
                 }
+            } // closes AnimatedVisibility
+
+            // ✅ Occupy / Release confirmation dialog — PASTE HERE
+            if (showOccupyConfirmDialog && occupyTargetHydrant != null) {
+                val h = occupyTargetHydrant!!
+                val isOccupied = h.serviceStatus == "Occupied"
+                AlertDialog(
+                    onDismissRequest = { showOccupyConfirmDialog = false },
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Warning, null,
+                                tint = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (isOccupied) "Release Hydrant" else "Occupy Hydrant",
+                                fontWeight = FontWeight.Bold,
+                                color = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                            )
+                        }
+                    },
+                    text = {
+                        Text(
+                            if (isOccupied)
+                                "Mark \"${h.hydrantName}\" as In Service (released)?"
+                            else
+                                "Mark \"${h.hydrantName}\" as Occupied? This hydrant will be shown as in use on the map."
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showOccupyConfirmDialog = false
+                                val newStatus = if (isOccupied) "In Service" else "Occupied"
+                                val currentUser = FirebaseAuth.getInstance().currentUser
+                                val performedBy = currentUser?.displayName?.takeIf { it.isNotBlank() }
+                                    ?: currentUser?.email ?: "Unknown"
+                                val rtdb = com.google.firebase.database.FirebaseDatabase
+                                    .getInstance("https://firegrid-58bc3-default-rtdb.asia-southeast1.firebasedatabase.app/")
+                                val sdf = java.text.SimpleDateFormat(
+                                    "MMMM dd, yyyy 'at' h:mm:ss a 'UTC+8'", java.util.Locale.ENGLISH
+                                )
+                                sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                                val timestamp = sdf.format(java.util.Date())
+                                rtdb.getReference("fire_hydrants")
+                                    .child(h.municipality)
+                                    .child(h.id)
+                                    .updateChildren(
+                                        if (newStatus == "Occupied") {
+                                            mapOf(
+                                                "ServiceStatus" to newStatus,
+                                                "LastUpdated" to timestamp,
+                                                "OccupiedBy" to performedBy,
+                                                "OccupiedAt" to timestamp
+                                            )
+                                        } else {
+                                            mapOf(
+                                                "ServiceStatus" to newStatus,
+                                                "LastUpdated" to timestamp,
+                                                "OccupiedBy" to "",
+                                                "OccupiedAt" to ""
+                                            )
+                                        }
+                                    )
+                                    .addOnSuccessListener {
+                                        if (newStatus == "Occupied") {
+                                            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                                            val notifId = (h.id + h.municipality).hashCode()
+                                            val scheduleIntent = Intent(context, HydrantOccupiedReceiver::class.java).apply {
+                                                action = "ACTION_FIRE_NOTIFICATION"
+                                                putExtra("hydrantId", h.id)
+                                                putExtra("hydrantName", h.hydrantName)
+                                                putExtra("municipality", h.municipality)
+                                                putExtra("occupiedBy", performedBy)
+                                                putExtra("notifId", notifId)
+                                            }
+                                            val pi = PendingIntent.getBroadcast(
+                                                context, notifId + 10, scheduleIntent,
+                                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                                            )
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                                alarmManager.setExactAndAllowWhileIdle(
+                                                    android.app.AlarmManager.RTC_WAKEUP,
+                                                    System.currentTimeMillis() + 60 * 60 * 1000L, pi
+                                                )
+                                            } else {
+                                                alarmManager.setExact(
+                                                    android.app.AlarmManager.RTC_WAKEUP,
+                                                    System.currentTimeMillis() + 60 * 60 * 1000L, pi
+                                                )
+                                            }
+                                        }
+                                        // Update the displayed card immediately
+                                        selectedHydrant = h.copy(serviceStatus = newStatus)
+                                        occupyTargetHydrant = null
+                                        Toast.makeText(
+                                            context,
+                                            if (newStatus == "Occupied") "🟠 Hydrant marked as Occupied"
+                                            else "🟢 Hydrant released (In Service)",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                    .addOnFailureListener {
+                                        Toast.makeText(context, "Failed to update status", Toast.LENGTH_SHORT).show()
+                                    }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                            )
+                        ) {
+                            Text(if (isOccupied) "Release" else "Occupy", color = Color.White)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showOccupyConfirmDialog = false }) {
+                            Text("Cancel", color = Color.Gray)
+                        }
+                    },
+                    containerColor = Color.White
+                )
             }
 
             if (hydrantUiState.isLoading || !markersReady) {
@@ -7038,6 +7283,7 @@ fun MapScreen(
 
     var isMyLocationEnabled by remember { mutableStateOf(false) }
     var isDrawerOpen by remember { mutableStateOf(false) }
+    var showOccupiedHydrantsDialog by remember { mutableStateOf(false) }
     var isSearchingNearestHydrant by remember { mutableStateOf(false) }
     var nearestHydrant by remember { mutableStateOf<FireHydrant?>(null) }
     var nearestHydrantDistance by remember { mutableStateOf<Double?>(null) }
@@ -7056,6 +7302,10 @@ fun MapScreen(
     var pendingLocationAction by remember { mutableStateOf("") }
     var hydrantDirectionsFetched by remember { mutableStateOf(false) }
     var fireDirectionsFetched by remember { mutableStateOf(false) }
+    var tts by remember { mutableStateOf<android.speech.tts.TextToSpeech?>(null) }
+    var lastSpokenStepIndex by remember { mutableStateOf(-1) }
+    var hasSpoken300m by remember { mutableStateOf(false) }
+    var hasSpokenNow by remember { mutableStateOf(false) }
 
     // Fire incident report counts for mail badge
     var pendingCount by remember { mutableStateOf(0) }
@@ -7067,6 +7317,7 @@ fun MapScreen(
     var searchQuery by remember { mutableStateOf("") }
     var searchSuggestions by remember { mutableStateOf<List<FireHydrant>>(emptyList()) }
     var totalFilteredCount by remember { mutableStateOf(0) }  // NEW: Track total count separately
+    var displayLimit by remember { mutableStateOf(50) }
     var selectedSearchHydrant by remember { mutableStateOf<FireHydrant?>(null) }
     var selectedMunicipality by remember { mutableStateOf<String?>(null) }
     var showMunicipalityDropdown by remember { mutableStateOf(false) }
@@ -7111,6 +7362,9 @@ fun MapScreen(
     var showHydrantDetailsCard by remember { mutableStateOf(false) }
     var selectedHydrantForCard by remember { mutableStateOf<FireHydrant?>(null) }
     var isCardVisible by remember { mutableStateOf(false) }
+    var isCardAdmin by remember { mutableStateOf(false) }
+    var isCardCheckingAdmin by remember { mutableStateOf(false) }
+    var showOccupyConfirmDialog by remember { mutableStateOf(false) }
     val cardTranslationY by animateFloatAsState(
         targetValue = if (isCardVisible) 0f else 1000f,
         animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
@@ -7119,6 +7373,39 @@ fun MapScreen(
 
     val hydrantViewModel: FireHydrantViewModel = viewModel()
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
+
+    LaunchedEffect(hydrantUiState.allHydrants, hydrantUiState.hydrants) {
+        val current = selectedHydrantForCard ?: return@LaunchedEffect
+        val updated = (hydrantUiState.allHydrants + hydrantUiState.hydrants).find {
+            it.id == current.id && it.municipality == current.municipality
+        }
+        if (updated != null && updated != current) {
+            selectedHydrantForCard = updated
+        }
+    }
+
+    // Check admin role whenever the details card opens for a hydrant
+    LaunchedEffect(selectedHydrantForCard) {
+        val h = selectedHydrantForCard
+        if (h == null) { isCardAdmin = false; return@LaunchedEffect }
+        val currentUser = FirebaseAuth.getInstance().currentUser
+        if (currentUser == null) { isCardAdmin = false; return@LaunchedEffect }
+        val email = currentUser.email?.lowercase() ?: run { isCardAdmin = false; return@LaunchedEffect }
+        isCardCheckingAdmin = true
+        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        db.collection("admins").document("chief_admin").collection("all").document(email).get()
+            .addOnSuccessListener { doc ->
+                if (doc.exists()) {
+                    isCardAdmin = true; isCardCheckingAdmin = false
+                } else {
+                    db.collection("admins").document("municipality_admin")
+                        .collection(h.municipality).document(email).get()
+                        .addOnSuccessListener { munDoc -> isCardAdmin = munDoc.exists(); isCardCheckingAdmin = false }
+                        .addOnFailureListener { isCardAdmin = false; isCardCheckingAdmin = false }
+                }
+            }
+            .addOnFailureListener { isCardAdmin = false; isCardCheckingAdmin = false }
+    }
 
     BackHandler(enabled = isDrawerOpen || isSearchOpen || selectedHydrantMarker != null || isCardVisible) {
         when {
@@ -7167,6 +7454,22 @@ fun MapScreen(
                 "Location is required for this feature",
                 android.widget.Toast.LENGTH_SHORT
             ).show()
+        }
+    }
+
+    // TTS engine — speaks navigation instructions aloud
+    DisposableEffect(Unit) {
+        var instance: android.speech.tts.TextToSpeech? = null
+        instance = android.speech.tts.TextToSpeech(context) { status ->
+            if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                instance?.language = java.util.Locale.getDefault()
+                tts = instance
+            }
+        }
+        onDispose {
+            tts = null
+            instance?.stop()
+            instance?.shutdown()
         }
     }
 
@@ -7305,12 +7608,36 @@ fun MapScreen(
                                     nearestHydrant = selectedHydrantForCard
                                     currentStepIndex = 0
                                     isNavigating = true
+                                    lastSpokenStepIndex = -1
+                                    hasSpoken300m = false
+                                    hasSpokenNow = false
                                     showHydrantDetailsCard = false
                                     selectedHydrantForCard = null
+                                    // Calculate bearing from user to first waypoint for navigation tilt
+                                    val bearing = run {
+                                        val firstStep = directionsResult?.steps?.firstOrNull()
+                                        val secondStep = directionsResult?.steps?.getOrNull(1)
+                                        val from = firstStep?.startLocation
+                                        val to = secondStep?.startLocation ?: firstStep?.startLocation
+                                        if (from != null && to != null && from != to) {
+                                            val lat1 = Math.toRadians(from.latitude)
+                                            val lat2 = Math.toRadians(to.latitude)
+                                            val dLng = Math.toRadians(to.longitude - from.longitude)
+                                            val y = Math.sin(dLng) * Math.cos(lat2)
+                                            val x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng)
+                                            ((Math.toDegrees(Math.atan2(y, x)) + 360) % 360).toFloat()
+                                        } else 0f
+                                    }
                                     cameraPositionState.animate(
-                                        CameraUpdateFactory.newLatLngZoom(
-                                            LatLng(location.latitude, location.longitude), 17f
-                                        )
+                                        CameraUpdateFactory.newCameraPosition(
+                                            CameraPosition.Builder()
+                                                .target(LatLng(location.latitude, location.longitude))
+                                                .zoom(18f)
+                                                .tilt(60f)
+                                                .bearing(bearing)
+                                                .build()
+                                        ),
+                                        durationMs = 1000
                                     )
                                 } else {
                                     android.widget.Toast.makeText(context, "Could not fetch directions", android.widget.Toast.LENGTH_SHORT).show()
@@ -7350,6 +7677,7 @@ fun MapScreen(
                                 isLoadingDirections = false
                                 nearestHydrant = selectedHydrantForCard
                                 showHydrantDetailsCard = false
+                                isCardVisible = false
                                 if (directionsResult == null) {
                                     android.widget.Toast.makeText(context, "Could not fetch directions", android.widget.Toast.LENGTH_SHORT).show()
                                 }
@@ -7368,6 +7696,37 @@ fun MapScreen(
     }
 
     LaunchedEffect(Unit) { hydrantViewModel.loadAllHydrants() }
+
+    val currentUserEmail = FirebaseAuth.getInstance().currentUser?.email?.lowercase() ?: ""
+    DisposableEffect(Unit) {
+        val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        // Use only ONE filter to avoid needing a composite index
+        val listenerStartTime = com.google.firebase.Timestamp.now()
+        val listener = firestore.collection("hydrant_notifications")
+            .whereEqualTo("seen", false)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    android.util.Log.e("HydrantNotif", "Listener error: ${error.message}")
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) return@addSnapshotListener
+                snapshot.documentChanges.forEach { change ->
+                    if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                        val doc = change.document
+                        // Skip docs older than when this listener started
+                        val docTime = doc.getTimestamp("timestamp") ?: return@forEach
+                        if (docTime < listenerStartTime) return@forEach
+                        val performedBy = doc.getString("performedBy")?.lowercase() ?: ""
+                        if (performedBy == currentUserEmail) return@forEach
+                        val title = doc.getString("title") ?: return@forEach
+                        val message = doc.getString("message") ?: return@forEach
+                        showHydrantChangeNotification(context, title, message)
+                        doc.reference.update("seen", true)
+                    }
+                }
+            }
+        onDispose { listener.remove() }
+    }
 
     // Fetch fire incident report counts from Firebase
     LaunchedEffect(Unit) {
@@ -7494,7 +7853,8 @@ fun MapScreen(
     }
 
     // FIXED: Debounced search — waits 150ms after last keystroke before filtering, runs off main thread
-    LaunchedEffect(searchQuery, hydrantsWithValidCoords, selectedMunicipality) {
+    LaunchedEffect(searchQuery, hydrantsWithValidCoords, selectedMunicipality, isSearchOpen) {
+        displayLimit = 50
         if (searchQuery.isNotBlank()) kotlinx.coroutines.delay(150)
         val (suggestions, count) = withContext(Dispatchers.Default) {
             val filteredByMunicipality = if (selectedMunicipality != null) {
@@ -7509,11 +7869,37 @@ fun MapScreen(
                             hydrant.exactLocation.lowercase().contains(query) ||
                             hydrant.municipality.lowercase().contains(query)
                 }
-                allMatches.take(50) to allMatches.size
+                allMatches.take(displayLimit) to allMatches.size
             } else if (selectedMunicipality != null) {
-                filteredByMunicipality.take(50) to filteredByMunicipality.size
+                filteredByMunicipality.take(displayLimit) to filteredByMunicipality.size
             } else {
-                emptyList<FireHydrant>() to 0
+                hydrantsWithValidCoords.take(displayLimit) to hydrantsWithValidCoords.size
+            }
+        }
+        searchSuggestions = suggestions
+        totalFilteredCount = count
+    }
+
+    LaunchedEffect(displayLimit) {
+        if (displayLimit == 50) return@LaunchedEffect
+        val (suggestions, count) = withContext(Dispatchers.Default) {
+            val filteredByMunicipality = if (selectedMunicipality != null) {
+                hydrantsWithValidCoords.filter { it.municipality == selectedMunicipality }
+            } else {
+                hydrantsWithValidCoords
+            }
+            if (searchQuery.isNotBlank()) {
+                val query = searchQuery.lowercase().trim()
+                val allMatches = filteredByMunicipality.filter { hydrant ->
+                    hydrant.hydrantName.lowercase().contains(query) ||
+                            hydrant.exactLocation.lowercase().contains(query) ||
+                            hydrant.municipality.lowercase().contains(query)
+                }
+                allMatches.take(displayLimit) to allMatches.size
+            } else if (selectedMunicipality != null) {
+                filteredByMunicipality.take(displayLimit) to filteredByMunicipality.size
+            } else {
+                hydrantsWithValidCoords.take(displayLimit) to hydrantsWithValidCoords.size
             }
         }
         searchSuggestions = suggestions
@@ -7531,6 +7917,7 @@ fun MapScreen(
     var greenMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var redMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var blueMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
+    var orangeMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var fireIncidentMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var markersReady by remember { mutableStateOf(false) }
     var firetruckMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
@@ -7542,7 +7929,7 @@ fun MapScreen(
             val topRadius = 14f
             val bottomY = 44f
 
-            val (gBmp, rBmp, bBmp, fBmp) = withContext(Dispatchers.Default) {
+            val bitmapList = withContext(Dispatchers.Default) {
                 val greenBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
                 val greenCanvas = android.graphics.Canvas(greenBitmap)
                 val greenPaint = android.graphics.Paint().apply { isAntiAlias = true; color = android.graphics.Color.parseColor("#4CAF50"); style = android.graphics.Paint.Style.FILL }
@@ -7586,19 +7973,32 @@ fun MapScreen(
                 firePaint.color = android.graphics.Color.parseColor("#FF5722")
                 fireCanvas.drawCircle(fireCenterX, fireTopRadius + 4f, 5f, firePaint)
 
-                listOf(greenBitmap, redBitmap, blueBitmap, fireBitmap)
+                // Orange bitmap for "Occupied" hydrants
+                val orangeBitmap = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+                val orangeCanvas = android.graphics.Canvas(orangeBitmap)
+                val orangePaint = android.graphics.Paint().apply { isAntiAlias = true; color = android.graphics.Color.parseColor("#FF9800"); style = android.graphics.Paint.Style.FILL }
+                orangeCanvas.drawCircle(centerX, topRadius + 4f, topRadius, orangePaint)
+                val orangeTriangle = android.graphics.Path()
+                orangeTriangle.moveTo(centerX, bottomY); orangeTriangle.lineTo(centerX - 12f, topRadius + 12f); orangeTriangle.lineTo(centerX + 12f, topRadius + 12f); orangeTriangle.close()
+                orangeCanvas.drawPath(orangeTriangle, orangePaint)
+                orangePaint.color = android.graphics.Color.WHITE
+                orangeCanvas.drawCircle(centerX, topRadius + 4f, 6f, orangePaint)
+
+                listOf(greenBitmap, redBitmap, blueBitmap, fireBitmap, orangeBitmap)
             }
 
-            greenMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(gBmp)
-            redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(rBmp)
-            blueMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bBmp)
-            fireIncidentMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(fBmp)
+            greenMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmapList[0])
+            redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmapList[1])
+            blueMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmapList[2])
+            fireIncidentMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmapList[3])
+            orangeMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmapList[4])
             markersReady = true
         } catch (e: Exception) {
             greenMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_GREEN)
             redMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_RED)
             blueMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_BLUE)
             fireIncidentMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_ORANGE)
+            orangeMarkerIcon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_YELLOW)
             markersReady = true
         }
     }
@@ -7666,18 +8066,21 @@ fun MapScreen(
         }
     }
 
-    // Auto-advance navigation steps when user moves close to next step
+    // Auto-advance navigation steps + Google Maps-style voice announcements
     LaunchedEffect(isNavigating, userCurrentLocation) {
         if (!isNavigating || directionsResult == null || userCurrentLocation == null) return@LaunchedEffect
 
         val steps = directionsResult!!.steps
         if (steps.isEmpty()) return@LaunchedEffect
 
+        val currentStep = steps.getOrNull(currentStepIndex) ?: return@LaunchedEffect
+        val lat1 = userCurrentLocation!!.latitude
+        val lon1 = userCurrentLocation!!.longitude
+
+        // Distance to the END of current step (= start of next step)
         val nextIndex = currentStepIndex + 1
         if (nextIndex < steps.size) {
             val nextStep = steps[nextIndex]
-            val lat1 = userCurrentLocation!!.latitude
-            val lon1 = userCurrentLocation!!.longitude
             val lat2 = nextStep.startLocation.latitude
             val lon2 = nextStep.startLocation.longitude
             val r = 6371
@@ -7689,9 +8092,34 @@ fun MapScreen(
             val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
             val distanceToNext = (r * c) * 1000 // meters
 
-            // Auto-advance when within 30 meters of next step
+            val cleanInstruction = currentStep.instruction.replace(Regex("<[^>]*>"), "")
+            val activeTts = tts
+
+            // ── Google Maps-style 3-announcement system ──────────────────
+            // 1) "In 300 meters, turn right onto X"  (when 250–350m away)
+            if (distanceToNext in 250.0..350.0 && !hasSpoken300m && activeTts != null) {
+                hasSpoken300m = true
+                activeTts.speak(
+                    "In 300 meters, $cleanInstruction",
+                    android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "nav_300"
+                )
+            }
+
+            // 2) "Turn right onto X"  (when within 50m — do it NOW)
+            if (distanceToNext < 50.0 && !hasSpokenNow && activeTts != null) {
+                hasSpokenNow = true
+                activeTts.speak(
+                    cleanInstruction,
+                    android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "nav_now"
+                )
+            }
+
+            // 3) Auto-advance step when within 30 meters
             if (distanceToNext < 30) {
                 currentStepIndex = nextIndex
+                hasSpoken300m = false
+                hasSpokenNow = false
+                lastSpokenStepIndex = nextIndex
 
                 // Re-center camera on user during navigation
                 cameraPositionState.animate(
@@ -8348,6 +8776,158 @@ fun MapScreen(
         )
     }
 
+    // Occupy / Release confirmation dialog
+    if (showOccupyConfirmDialog && selectedHydrantForCard != null) {
+        val hydrant = selectedHydrantForCard!!
+        val isOccupied = hydrant.serviceStatus == "Occupied"
+        AlertDialog(
+            onDismissRequest = { showOccupyConfirmDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Warning, null,
+                        tint = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (isOccupied) "Release Hydrant" else "Occupy Hydrant",
+                        fontWeight = FontWeight.Bold,
+                        color = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                    )
+                }
+            },
+            text = {
+                Text(
+                    if (isOccupied)
+                        "Mark \"${hydrant.hydrantName}\" as In Service (released)?"
+                    else
+                        "Mark \"${hydrant.hydrantName}\" as Occupied? This hydrant will be shown as in use on the map."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showOccupyConfirmDialog = false
+                        val newStatus = if (isOccupied) "In Service" else "Occupied"
+                        val currentUser = FirebaseAuth.getInstance().currentUser
+                        val performedBy = currentUser?.displayName?.takeIf { it.isNotBlank() }
+                            ?: currentUser?.email ?: "Unknown"
+                        val rtdb = com.google.firebase.database.FirebaseDatabase
+                            .getInstance("https://firegrid-58bc3-default-rtdb.asia-southeast1.firebasedatabase.app/")
+                        val sdf = java.text.SimpleDateFormat(
+                            "MMMM dd, yyyy 'at' h:mm:ss a 'UTC+8'", java.util.Locale.ENGLISH
+                        )
+                        sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                        val timestamp = sdf.format(java.util.Date())
+                        rtdb.getReference("fire_hydrants")
+                            .child(hydrant.municipality)
+                            .child(hydrant.id)
+                            .updateChildren(
+                                if (newStatus == "Occupied") {
+                                    mapOf(
+                                        "ServiceStatus" to newStatus,
+                                        "LastUpdated" to timestamp,
+                                        "OccupiedBy" to performedBy,
+                                        "OccupiedAt" to timestamp
+                                    )
+                                } else {
+                                    mapOf(
+                                        "ServiceStatus" to newStatus,
+                                        "LastUpdated" to timestamp,
+                                        "OccupiedBy" to "",
+                                        "OccupiedAt" to ""
+                                    )
+                                }
+                            )
+                            .addOnSuccessListener {
+                                logHydrantChange(
+                                    context = context,
+                                    changeType = "updated",
+                                    hydrantId = hydrant.id,
+                                    hydrantName = hydrant.hydrantName,
+                                    exactLocation = hydrant.exactLocation,
+                                    latitude = hydrant.latitude,
+                                    longitude = hydrant.longitude,
+                                    typeColor = hydrant.typeColor,
+                                    newStatus = newStatus,
+                                    remarks = hydrant.remarks,
+                                    municipality = hydrant.municipality,
+                                    performedBy = performedBy,
+                                    changedFields = mapOf("ServiceStatus" to Pair(hydrant.serviceStatus, newStatus))
+                                )
+
+                                if (newStatus == "Occupied") {
+                                    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                                    val notifId = (hydrant.id + hydrant.municipality).hashCode()
+
+                                    val scheduleIntent = Intent(context, HydrantOccupiedReceiver::class.java).apply {
+                                        action = "ACTION_FIRE_NOTIFICATION"
+                                        putExtra("hydrantId", hydrant.id)
+                                        putExtra("hydrantName", hydrant.hydrantName)
+                                        putExtra("municipality", hydrant.municipality)
+                                        putExtra("occupiedBy", performedBy)
+                                        putExtra("notifId", notifId)
+                                    }
+                                    val pi = PendingIntent.getBroadcast(
+                                        context, notifId + 10, scheduleIntent,
+                                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                                    )
+                                    val triggerAt = System.currentTimeMillis() + 60 * 60 * 1000L // 1 hour
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi)
+                                    } else {
+                                        alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi)
+                                    }
+
+                                    val autoReleaseIntent = Intent(context, HydrantOccupiedReceiver::class.java).apply {
+                                        action = "ACTION_AUTO_RELEASE"
+                                        putExtra("hydrantId", hydrant.id)
+                                        putExtra("hydrantName", hydrant.hydrantName)
+                                        putExtra("municipality", hydrant.municipality)
+                                        putExtra("notifId", notifId)
+                                    }
+                                    val autoPi = PendingIntent.getBroadcast(
+                                        context, notifId + 20, autoReleaseIntent,
+                                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                                    )
+                                    val autoTriggerAt = System.currentTimeMillis() + (1 + 10) * 60 * 1000L // 11 minutes
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, autoTriggerAt, autoPi)
+                                    } else {
+                                        alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, autoTriggerAt, autoPi)
+                                    }
+                                }
+
+                                selectedHydrantForCard = hydrant.copy(serviceStatus = newStatus)
+                                hydrantViewModel.updateLocalHydrantStatus(hydrant.id, newStatus)
+                                Toast.makeText(
+                                    context,
+                                    if (newStatus == "Occupied") "🟠 Hydrant marked as Occupied"
+                                    else "🟢 Hydrant released (In Service)",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            .addOnFailureListener {
+                                Toast.makeText(context, "Failed to update status", Toast.LENGTH_SHORT).show()
+                            }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                    )
+                ) {
+                    Text(if (isOccupied) "Release" else "Occupy", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOccupyConfirmDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color.White
+        )
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         // Stable objects — only recreate MapProperties when isMyLocationEnabled actually changes
         val mapProperties = remember(isMyLocationEnabled) {
@@ -8369,12 +8949,13 @@ fun MapScreen(
         ) {
             if (markersReady && greenMarkerIcon != null && redMarkerIcon != null) {
                 // Pre-compute icon per hydrant — composite key avoids id collisions across municipalities
-                val markerIconMap = remember(nearestHydrant, greenMarkerIcon, redMarkerIcon, blueMarkerIcon) {
+                val markerIconMap = remember(nearestHydrant, greenMarkerIcon, redMarkerIcon, blueMarkerIcon, orangeMarkerIcon, hydrantUiState.allHydrants) {
                     hydrantsWithValidCoords.associate { h ->
                         val isNearest = nearestHydrant?.let { it.id == h.id && it.municipality == h.municipality } ?: false
                         "${h.id}_${h.municipality}" to when {
                             isNearest -> blueMarkerIcon!!
                             h.serviceStatus == "In Service" -> greenMarkerIcon!!
+                            h.serviceStatus == "Occupied" -> orangeMarkerIcon ?: greenMarkerIcon!!
                             else -> redMarkerIcon!!
                         }
                     }
@@ -8384,9 +8965,12 @@ fun MapScreen(
                     val lat = hydrant.latitude.toDoubleOrNull() ?: return@forEach
                     val lng = hydrant.longitude.toDoubleOrNull() ?: return@forEach
                     val markerIcon = markerIconMap["${hydrant.id}_${hydrant.municipality}"]
-                        ?: if (hydrant.serviceStatus == "In Service") greenMarkerIcon!! else redMarkerIcon!!
-                    val markerState = remember(hydrant.id) { com.google.maps.android.compose.MarkerState(position = LatLng(lat, lng)) }
-
+                        ?: when {
+                            hydrant.serviceStatus == "In Service" -> greenMarkerIcon!!
+                            hydrant.serviceStatus == "Occupied" -> orangeMarkerIcon ?: greenMarkerIcon!!
+                            else -> redMarkerIcon!!
+                        }
+                    val markerState = remember(hydrant.id, hydrant.municipality) { com.google.maps.android.compose.MarkerState(position = LatLng(lat, lng)) }
                     com.google.maps.android.compose.Marker(
                         state = markerState,
                         title = "${hydrant.municipality} - ${hydrant.hydrantName}",
@@ -8605,6 +9189,10 @@ fun MapScreen(
                         )
                     }
 
+                    val municipalityCounts = remember(hydrantsWithValidCoords) {
+                        availableMunicipalities.associateWith { m -> hydrantsWithValidCoords.count { it.municipality == m } }
+                    }
+
                     // Municipality Filter
                     Box(
                         modifier = Modifier
@@ -8680,82 +9268,80 @@ fun MapScreen(
                             }
                         }
 
-                        // Dropdown Menu
-                        DropdownMenu(
-                            expanded = showMunicipalityDropdown,
-                            onDismissRequest = { showMunicipalityDropdown = false },
-                            modifier = Modifier
-                                .fillMaxWidth(0.9f)
-                                .heightIn(max = 300.dp)
-                        ) {
-                            // All Cities and Municipalities option
-                            DropdownMenuItem(
-                                text = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Image(
-                                            painter = painterResource(id = R.drawable.laguna_logo),
-                                            contentDescription = "Laguna logo",
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(CircleShape),
-                                            contentScale = ContentScale.Crop
-                                        )
-                                        Spacer(Modifier.width(12.dp))
-                                        Text(
-                                            "All Cities and Municipalities",
-                                            fontWeight = if (selectedMunicipality == null) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    selectedMunicipality = null
-                                    showMunicipalityDropdown = false
-                                }
-                            )
-
-                            HorizontalDivider(color = Color(0xFFE0E0E0))
-
-                            // Municipality options
-                            availableMunicipalities.forEach { municipality ->
-                                val count = hydrantsWithValidCoords.count { it.municipality == municipality }
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            // Municipality Logo
-                                            Image(
-                                                painter = painterResource(id = getMunicipalityLogo(municipality)),
-                                                contentDescription = "$municipality logo",
-                                                modifier = Modifier
-                                                    .size(28.dp)
-                                                    .clip(CircleShape),
-                                                contentScale = ContentScale.Crop
-                                            )
-                                            Spacer(Modifier.width(12.dp))
-                                            Text(
-                                                municipality,
-                                                fontWeight = if (selectedMunicipality == municipality) FontWeight.Bold else FontWeight.Normal,
-                                                color = if (selectedMunicipality == municipality) Color(0xFFFF6B35) else Color.Black
-                                            )
-                                            Spacer(Modifier.weight(1f))
-                                            Surface(
-                                                color = if (selectedMunicipality == municipality) Color(0xFFFF6B35) else Color(0xFFE0E0E0),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text(
-                                                    "$count",
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = if (selectedMunicipality == municipality) Color.White else Color(0xFF666666),
-                                                    fontWeight = FontWeight.Medium
-                                                )
+                        // Dropdown Menu — no animation, instant open
+                        if (showMunicipalityDropdown) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 300.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                shadowElevation = 4.dp,
+                                color = Color.White
+                            ) {
+                                LazyColumn {
+                                    item {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Image(
+                                                        painter = painterResource(id = R.drawable.laguna_logo),
+                                                        contentDescription = "Laguna logo",
+                                                        modifier = Modifier.size(28.dp).clip(CircleShape),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                    Spacer(Modifier.width(12.dp))
+                                                    Text(
+                                                        "All Cities and Municipalities",
+                                                        fontWeight = if (selectedMunicipality == null) FontWeight.Bold else FontWeight.Normal
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                selectedMunicipality = null
+                                                showMunicipalityDropdown = false
                                             }
-                                        }
-                                    },
-                                    onClick = {
-                                        selectedMunicipality = municipality
-                                        showMunicipalityDropdown = false
+                                        )
+                                        HorizontalDivider(color = Color(0xFFE0E0E0))
                                     }
-                                )
+                                    items(availableMunicipalities) { municipality ->
+                                        val count = municipalityCounts[municipality] ?: 0
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Image(
+                                                        painter = painterResource(id = getMunicipalityLogo(municipality)),
+                                                        contentDescription = "$municipality logo",
+                                                        modifier = Modifier.size(28.dp).clip(CircleShape),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                    Spacer(Modifier.width(12.dp))
+                                                    Text(
+                                                        municipality,
+                                                        fontWeight = if (selectedMunicipality == municipality) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (selectedMunicipality == municipality) Color(0xFFFF6B35) else Color.Black
+                                                    )
+                                                    Spacer(Modifier.weight(1f))
+                                                    Surface(
+                                                        color = if (selectedMunicipality == municipality) Color(0xFFFF6B35) else Color(0xFFE0E0E0),
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    ) {
+                                                        Text(
+                                                            "$count",
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = if (selectedMunicipality == municipality) Color.White else Color(0xFF666666),
+                                                            fontWeight = FontWeight.Medium
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                selectedMunicipality = municipality
+                                                showMunicipalityDropdown = false
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -8763,7 +9349,7 @@ fun MapScreen(
                     HorizontalDivider(color = Color(0xFFE0E0E0))
 
                     // Search Suggestions
-                    if (searchQuery.isNotEmpty() || selectedMunicipality != null) {
+                    if (searchQuery.isNotEmpty() || selectedMunicipality != null || searchSuggestions.isNotEmpty()) {
                         if (searchSuggestions.isEmpty()) {
                             // No results
                             Box(
@@ -8879,20 +9465,31 @@ fun MapScreen(
                                     )
                                 }
 
-                                // Show "showing X of Y" if there are more results than displayed
+                                // Show "showing X of Y" + Load More button
                                 if (totalFilteredCount > searchSuggestions.size) {
                                     item {
-                                        Box(
+                                        Column(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .padding(16.dp),
-                                            contentAlignment = Alignment.Center
+                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
                                         ) {
                                             Text(
                                                 "Showing ${searchSuggestions.size} of $totalFilteredCount results",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = Color.Gray
                                             )
+                                            Spacer(Modifier.height(8.dp))
+                                            OutlinedButton(
+                                                onClick = { displayLimit += 50 },
+                                                shape = RoundedCornerShape(50),
+                                                border = BorderStroke(1.dp, Color(0xFFFF6B35)),
+                                                colors = ButtonDefaults.outlinedButtonColors(
+                                                    contentColor = Color(0xFFFF6B35)
+                                                )
+                                            ) {
+                                                Text("Load More")
+                                            }
                                         }
                                     }
                                 }
@@ -9091,11 +9688,25 @@ fun MapScreen(
                                             navigationHydrant = nearestHydrant
                                             currentStepIndex = 0
                                             isNavigating = true
+                                            lastSpokenStepIndex = -1
+                                            hasSpoken300m = false
+                                            hasSpokenNow = false
                                             showIncidentInfoCard = false
                                             scope.launch {
                                                 userCurrentLocation?.let { loc ->
+                                                    val bearing9 = run {
+                                                        val s1 = directionsResult?.steps?.firstOrNull()?.startLocation
+                                                        val s2 = directionsResult?.steps?.getOrNull(1)?.startLocation
+                                                        if (s1 != null && s2 != null) {
+                                                            val lat1 = Math.toRadians(s1.latitude); val lat2 = Math.toRadians(s2.latitude)
+                                                            val dLng = Math.toRadians(s2.longitude - s1.longitude)
+                                                            ((Math.toDegrees(Math.atan2(Math.sin(dLng) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng))) + 360) % 360).toFloat()
+                                                        } else 0f
+                                                    }
                                                     cameraPositionState.animate(
-                                                        CameraUpdateFactory.newLatLngZoom(loc, 17f)
+                                                        CameraUpdateFactory.newCameraPosition(
+                                                            CameraPosition.Builder().target(loc).zoom(18f).tilt(60f).bearing(bearing9).build()
+                                                        ), durationMs = 1000
                                                     )
                                                 }
                                             }
@@ -9243,11 +9854,25 @@ fun MapScreen(
                                         // Already have directions → start navigation to fire
                                         currentStepIndex = 0
                                         isNavigating = true
+                                        lastSpokenStepIndex = -1
+                                        hasSpoken300m = false
+                                        hasSpokenNow = false
                                         showIncidentInfoCard = false
                                         scope.launch {
                                             userCurrentLocation?.let { loc ->
+                                                val bearing10 = run {
+                                                    val s1 = directionsResult?.steps?.firstOrNull()?.startLocation
+                                                    val s2 = directionsResult?.steps?.getOrNull(1)?.startLocation
+                                                    if (s1 != null && s2 != null) {
+                                                        val lat1 = Math.toRadians(s1.latitude); val lat2 = Math.toRadians(s2.latitude)
+                                                        val dLng = Math.toRadians(s2.longitude - s1.longitude)
+                                                        ((Math.toDegrees(Math.atan2(Math.sin(dLng) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng))) + 360) % 360).toFloat()
+                                                    } else 0f
+                                                }
                                                 cameraPositionState.animate(
-                                                    CameraUpdateFactory.newLatLngZoom(loc, 17f)
+                                                    CameraUpdateFactory.newCameraPosition(
+                                                        CameraPosition.Builder().target(loc).zoom(18f).tilt(60f).bearing(bearing10).build()
+                                                    ), durationMs = 1000
                                                 )
                                             }
                                         }
@@ -9453,8 +10078,11 @@ fun MapScreen(
                             )
 
                             Surface(
-                                color = if (selectedHydrantForCard!!.serviceStatus == "In Service")
-                                    Color(0xFF4CAF50) else Color(0xFFEF5350),
+                                color = when (selectedHydrantForCard!!.serviceStatus) {
+                                    "In Service" -> Color(0xFF4CAF50)
+                                    "Occupied"   -> Color(0xFFFF9800)
+                                    else         -> Color(0xFFEF5350)
+                                },
                                 shape = RoundedCornerShape(4.dp)
                             ) {
                                 Text(
@@ -9665,12 +10293,42 @@ fun MapScreen(
                             }
                         }
                     }
+
+                    // Occupy / Release button — admin only
+                    if (isCardAdmin && (selectedHydrantForCard!!.serviceStatus == "In Service" || selectedHydrantForCard!!.serviceStatus == "Occupied")) {
+                        Spacer(Modifier.height(8.dp))
+                        val isOccupied = selectedHydrantForCard!!.serviceStatus == "Occupied"
+                        Button(
+                            onClick = { showOccupyConfirmDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (isOccupied) "Release Hydrant" else "Occupy Hydrant",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
             }
         }
-
-        // Menu Button (hide when search is open)
-        if (!isSearchOpen && !showIncidentInfoCard) {
+        if (!isSearchOpen && !showIncidentInfoCard && !isNavigating) {
             FloatingActionButton(
                 onClick = { isDrawerOpen = true },
                 modifier = Modifier
@@ -9692,7 +10350,8 @@ fun MapScreen(
         }
 
         // Emergency, Mail and Search Button Row (hide when search is open)
-        if (!isSearchOpen && !showIncidentInfoCard) {
+        // After
+        if (!isSearchOpen && !showIncidentInfoCard && !isNavigating) {
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -10169,11 +10828,23 @@ fun MapScreen(
                                         navigationHydrant = nearestHydrant
                                         currentStepIndex = 0
                                         isNavigating = true
+                                        lastSpokenStepIndex = -1
+                                        hasSpoken300m = false
+                                        hasSpokenNow = false
                                         scope.launch {
+                                            val bearing11 = run {
+                                                val s1 = directionsResult?.steps?.firstOrNull()?.startLocation
+                                                val s2 = directionsResult?.steps?.getOrNull(1)?.startLocation
+                                                if (s1 != null && s2 != null) {
+                                                    val lat1 = Math.toRadians(s1.latitude); val lat2 = Math.toRadians(s2.latitude)
+                                                    val dLng = Math.toRadians(s2.longitude - s1.longitude)
+                                                    ((Math.toDegrees(Math.atan2(Math.sin(dLng) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng))) + 360) % 360).toFloat()
+                                                } else 0f
+                                            }
                                             cameraPositionState.animate(
-                                                CameraUpdateFactory.newLatLngZoom(
-                                                    userCurrentLocation!!, 17f
-                                                )
+                                                CameraUpdateFactory.newCameraPosition(
+                                                    CameraPosition.Builder().target(userCurrentLocation!!).zoom(18f).tilt(60f).bearing(bearing11).build()
+                                                ), durationMs = 1000
                                             )
                                         }
                                     }
@@ -10237,36 +10908,67 @@ fun MapScreen(
             val steps = directionsResult!!.steps  // List<DirectionStep> — see note below
             val currentStep = steps.getOrNull(currentStepIndex)
 
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-            ) {
+            // Speak step-start announcement: "In 500 meters, turn right onto X"
+            LaunchedEffect(currentStepIndex, tts) {
+                val activeTts = tts ?: return@LaunchedEffect
+                if (currentStep != null && currentStepIndex != lastSpokenStepIndex) {
+                    lastSpokenStepIndex = currentStepIndex
+                    hasSpoken300m = false
+                    hasSpokenNow = false
+                    val cleanInstruction = currentStep.instruction.replace(Regex("<[^>]*>"), "")
+                    val distStr = currentStep.distance.trim()
+                    // Opening announcement like Google Maps: "In X, [instruction]"
+                    val speechText = "In $distStr, $cleanInstruction"
+                    activeTts.speak(speechText, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "nav_start")
+                }
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+
                 // Top instruction banner (green, like Google Maps)
                 if (currentStep != null) {
                     Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = Color(0xFF1B5E20),
-                        shadowElevation = 8.dp
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 12.dp),
+                        color = Color(0xFF2E7D32),
+                        shape = RoundedCornerShape(16.dp),
+                        shadowElevation = 12.dp
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                .padding(horizontal = 20.dp, vertical = 18.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // Dynamic direction icon based on maneuver type
+                            val maneuverRotation = when {
+                                currentStep.maneuver.contains("turn-left") -> -90f
+                                currentStep.maneuver.contains("turn-right") -> 90f
+                                currentStep.maneuver.contains("uturn") -> 180f
+                                currentStep.maneuver.contains("straight") -> 0f
+                                currentStep.maneuver.contains("fork-left") || currentStep.maneuver.contains("keep-left") -> -45f
+                                currentStep.maneuver.contains("fork-right") || currentStep.maneuver.contains("keep-right") -> 45f
+                                currentStep.maneuver.contains("ramp-left") -> -45f
+                                currentStep.maneuver.contains("ramp-right") -> 45f
+                                else -> 0f
+                            }
                             Icon(
-                                Icons.Default.Directions,
-                                contentDescription = null,
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = currentStep.maneuver,
                                 tint = Color.White,
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .rotate(maneuverRotation + 90f)
                             )
                             Spacer(Modifier.width(12.dp))
                             Column {
                                 Text(
                                     text = currentStep.instruction
                                         .replace(Regex("<[^>]*>"), ""), // Strip HTML tags
-                                    style = MaterialTheme.typography.titleMedium,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontSize = 22.sp,
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 2
@@ -10283,8 +10985,8 @@ fun MapScreen(
                                             } else distStr
                                         } else distStr
                                     },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White.copy(alpha = 0.8f)
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White.copy(alpha = 0.85f)
                                 )
                             }
                         }
@@ -10292,9 +10994,11 @@ fun MapScreen(
                 }
 
                 // Bottom bar: distance + time + Exit
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color.White,
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+                color = Color.White,
                     shadowElevation = 8.dp
                 ) {
                     Row(
@@ -10433,13 +11137,95 @@ fun MapScreen(
                                         nearestHydrantDistance = null
                                     }
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                                shape = RoundedCornerShape(20.dp)
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.White,
+                                    contentColor = Color(0xFF444444)
+                                ),
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .border(1.5.dp, Color(0xFFCCCCCC), CircleShape),
+                                contentPadding = PaddingValues(0.dp),
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp),
                             ) {
-                                Text("Exit", color = Color.White, fontWeight = FontWeight.Bold)
+                                Icon(
+                                    painter = painterResource(id = R.drawable.close_button),
+                                    contentDescription = "Exit navigation",
+                                    tint = Color(0xFF444444),
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
                     }
+            }
+
+                // ── Overview / Normal View toggle button (bottom-right) ──
+                var isOverviewMode by remember { mutableStateOf(false) }
+                FloatingActionButton(
+                    onClick = {
+                        isOverviewMode = !isOverviewMode
+                        scope.launch {
+                            if (!isOverviewMode) {
+                                // Go back to navigation tilt view (re-center on user)
+                                val loc = userCurrentLocation
+                                if (loc != null) {
+                                    val bearing = run {
+                                        val s1 = directionsResult?.steps?.getOrNull(currentStepIndex)?.startLocation
+                                        val s2 = directionsResult?.steps?.getOrNull(currentStepIndex + 1)?.startLocation
+                                        if (s1 != null && s2 != null) {
+                                            val lat1 = Math.toRadians(s1.latitude)
+                                            val lat2 = Math.toRadians(s2.latitude)
+                                            val dLng = Math.toRadians(s2.longitude - s1.longitude)
+                                            val y = Math.sin(dLng) * Math.cos(lat2)
+                                            val x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng)
+                                            ((Math.toDegrees(Math.atan2(y, x)) + 360) % 360).toFloat()
+                                        } else 0f
+                                    }
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.newCameraPosition(
+                                            CameraPosition.Builder()
+                                                .target(loc)
+                                                .zoom(18f)
+                                                .tilt(60f)
+                                                .bearing(bearing)
+                                                .build()
+                                        ),
+                                        durationMs = 800
+                                    )
+                                }
+                            } else {
+                                // Overview mode: fit the entire route using LatLngBounds (like Google Maps)
+                                val routePoints = directionsResult?.polylinePoints
+                                if (!routePoints.isNullOrEmpty()) {
+                                    val boundsBuilder = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                                    routePoints.forEach { boundsBuilder.include(it) }
+                                    // Also include user location so the blue dot is visible
+                                    userCurrentLocation?.let { boundsBuilder.include(it) }
+                                    val bounds = boundsBuilder.build()
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.newLatLngBounds(
+                                            bounds,
+                                            120 // padding in pixels around the route edges
+                                        ),
+                                        durationMs = 900
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 90.dp),
+                    containerColor = Color.White,
+                    contentColor = Color(0xFF1B5E20),
+                    shape = CircleShape,
+                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = if (isOverviewMode) R.drawable.icon_navigation else R.drawable.expand),
+                        contentDescription = if (isOverviewMode) "Back to navigation" else "Overview",
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
             }
         }
@@ -10496,7 +11282,7 @@ fun MapScreen(
                 color = Color.White,
                 shadowElevation = 0.dp
             ) {
-                Column(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -10771,7 +11557,43 @@ fun MapScreen(
                             )
                         }
                     }
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp, horizontal = 16.dp), color = Color(0xFFE0E0E0))
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp, horizontal = 16.dp), color = Color(0xFFE0E0E0))
+
+// Occupied Hydrants
+                    Surface(
+                        onClick = {
+                            isDrawerOpen = false
+                            showOccupiedHydrantsDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color.Transparent
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color(0xFFFF9800),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    "Occupied Hydrants",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    "${hydrantsWithValidCoords.count { it.serviceStatus == "Occupied" }} occupied",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFFF9800)
+                                )
+                            }
+                        }
+                    }
 
                     Text(
                         "Map Legend",
@@ -10823,6 +11645,165 @@ fun MapScreen(
                 }
             }
         }
+    }
+
+    // Occupied Hydrants Dialog
+    if (showOccupiedHydrantsDialog) {
+        val occupiedList = hydrantsWithValidCoords.filter { it.serviceStatus == "Occupied" }
+
+        // Live timer — ticks every second
+        var now by remember { mutableStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(1000L)
+                now = System.currentTimeMillis()
+            }
+        }
+
+        fun formatElapsed(occupiedAtStr: String): String {
+            return try {
+                val sdf = java.text.SimpleDateFormat("MMMM dd, yyyy 'at' h:mm:ss a 'UTC+8'", java.util.Locale.ENGLISH)
+                sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                val occupiedTime = sdf.parse(occupiedAtStr)?.time ?: return "Unknown"
+                val elapsed = now - occupiedTime
+                val h = elapsed / 3600000
+                val m = (elapsed % 3600000) / 60000
+                val s = (elapsed % 60000) / 1000
+                when {
+                    h > 0 -> "${h}h ${m}m ${s}s"
+                    m > 0 -> "${m}m ${s}s"
+                    else  -> "${s}s"
+                }
+            } catch (e: Exception) { "Unknown" }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showOccupiedHydrantsDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Warning, null, tint = Color(0xFFFF9800), modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Occupied Hydrants", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        color = Color(0xFFFF9800),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            "${occupiedList.size}",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            },
+            text = {
+                if (occupiedList.isEmpty()) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("No occupied hydrants at this time.", color = Color.Gray)
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                        items(occupiedList) { hydrant ->
+                            Card(
+                                onClick = {
+                                    val lat = hydrant.latitude.toDoubleOrNull()
+                                    val lng = hydrant.longitude.toDoubleOrNull()
+                                    if (lat != null && lng != null) {
+                                        showOccupiedHydrantsDialog = false
+                                        selectedHydrantForCard = hydrant
+                                        showHydrantDetailsCard = true
+                                        isCardVisible = true
+                                        scope.launch {
+                                            cameraPositionState.animate(
+                                                CameraUpdateFactory.newLatLngZoom(LatLng(lat, lng), 17f),
+                                                durationMs = 800
+                                            )
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, Color(0xFFFFCC80))
+                            ) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                    // Hydrant name + live timer badge
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                            Icon(Icons.Default.LocationOn, null, tint = Color(0xFFFF9800), modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                hydrant.hydrantName,
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                        }
+                                        // Live elapsed timer
+                                        if (hydrant.occupiedAt.isNotEmpty()) {
+                                            Surface(
+                                                color = Color(0xFFEF6C00),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text(
+                                                    "⏱ ${formatElapsed(hydrant.occupiedAt)}",
+                                                    color = Color.White,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                    // Location & municipality
+                                    Text(hydrant.exactLocation, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                    Text(hydrant.municipality, style = MaterialTheme.typography.bodySmall, color = Color(0xFFFF9800))
+                                    Spacer(Modifier.height(6.dp))
+                                    HorizontalDivider(color = Color(0xFFFFCC80))
+                                    Spacer(Modifier.height(6.dp))
+                                    // Who occupied
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.AccountBox, null, tint = Color(0xFF5F6368), modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            "Occupied by: ${if (hydrant.occupiedBy.isNotEmpty()) hydrant.occupiedBy else "Unknown"}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF5F6368)
+                                        )
+                                    }
+                                    Spacer(Modifier.height(2.dp))
+                                    // When occupied
+                                    if (hydrant.occupiedAt.isNotEmpty()) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Info, null, tint = Color(0xFF5F6368), modifier = Modifier.size(14.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(
+                                                "Since: ${hydrant.occupiedAt}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFF9E9E9E)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showOccupiedHydrantsDialog = false }) {
+                    Text("Close")
+                }
+            },
+            containerColor = Color.White
+        )
     }
 }
 
@@ -14499,6 +15480,8 @@ fun RemoveAdminScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var selectedAdmin by remember { mutableStateOf<AdminUser?>(null) }
+    var showFilterDialog by remember { mutableStateOf(false) }
+    var selectedRoleFilter by remember { mutableStateOf<AdminRole?>(null) }
     var uid by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var isLoadingAdmins by remember { mutableStateOf(true) }
@@ -14628,6 +15611,94 @@ fun RemoveAdminScreen(
             }
         }
         return
+    }
+
+    // Filter Dialog
+    if (showFilterDialog) {
+        AlertDialog(
+            onDismissRequest = { showFilterDialog = false },
+            title = {
+                Text("Filter Admins", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Select which admins to display:", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+
+                    // ALL option
+                    Card(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            selectedRoleFilter = null
+                            showFilterDialog = false
+                        },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (selectedRoleFilter == null) Color(0xFFFFCDD2) else Color(0xFFF5F5F5)
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("👥", fontSize = 24.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("All Admins", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+                                Text("Show all administrators", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                            }
+                            if (selectedRoleFilter == null) Icon(Icons.Default.Check, null, tint = Color(0xFFEF5350))
+                        }
+                    }
+
+                    // CHIEF ADMIN option
+                    Card(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            selectedRoleFilter = AdminRole.CHIEF_ADMINISTRATOR
+                            showFilterDialog = false
+                        },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (selectedRoleFilter == AdminRole.CHIEF_ADMINISTRATOR) Color(0xFFFFF3E0) else Color(0xFFF5F5F5)
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("⭐", fontSize = 24.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Chief Admin", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge, color = Color(0xFFE65100))
+                                Text("Full access administrators", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                            }
+                            if (selectedRoleFilter == AdminRole.CHIEF_ADMINISTRATOR) Icon(Icons.Default.Check, null, tint = Color(0xFFE65100))
+                        }
+                    }
+
+                    // MUNICIPALITY ADMIN option
+                    Card(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            selectedRoleFilter = AdminRole.MUNICIPALITY_ADMIN
+                            showFilterDialog = false
+                        },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (selectedRoleFilter == AdminRole.MUNICIPALITY_ADMIN) Color(0xFFFFCDD2) else Color(0xFFF5F5F5)
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("🏛️", fontSize = 24.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Municipality Admin", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge, color = Color(0xFFD32F2F))
+                                Text("Municipality-level administrators", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                            }
+                            if (selectedRoleFilter == AdminRole.MUNICIPALITY_ADMIN) Icon(Icons.Default.Check, null, tint = Color(0xFFD32F2F))
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showFilterDialog = false }) {
+                    Text("Close", color = Color.Gray)
+                }
+            },
+            containerColor = Color.White
+        )
     }
 
     // UID Confirmation Dialog
@@ -14769,18 +15840,34 @@ fun RemoveAdminScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header Card
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().clickable { showFilterDialog = true },
                 colors = CardDefaults.cardColors(containerColor = Color.White),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Remove Admin Privileges", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFFEF5350))
                     Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                        Text(
+                            when (selectedRoleFilter) {
+                                AdminRole.CHIEF_ADMINISTRATOR -> "Showing: Chief Admins"
+                                AdminRole.MUNICIPALITY_ADMIN -> "Showing: Municipality Admins"
+                                else -> "Showing: All Admins"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFFEF5350)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Filter", tint = Color(0xFFEF5350), modifier = Modifier.size(18.dp))
+                    }
                     Text(
-                        if (isLoadingAdmins) "Loading admins..." else "Select an admin to remove (${adminsList.size} admin${if (adminsList.size != 1) "s" else ""})",
-                        style = MaterialTheme.typography.bodyMedium,
+                        if (isLoadingAdmins) "Loading admins..."
+                        else {
+                            val count = adminsList.count { selectedRoleFilter == null || it.role == selectedRoleFilter }
+                            "$count admin${if (count != 1) "s" else ""} found"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
                         textAlign = TextAlign.Center
                     )
@@ -14801,7 +15888,7 @@ fun RemoveAdminScreen(
                     }
                 }
             } else {
-                adminsList.forEach { admin ->
+                adminsList.filter { selectedRoleFilter == null || it.role == selectedRoleFilter }.forEach { admin ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -15421,6 +16508,131 @@ fun ProfileMenuItem(title: String, onClick: () -> Unit, isLogout: Boolean = fals
                 contentDescription = "Navigate",
                 tint = if (isLogout) MaterialTheme.colorScheme.error else Color(0xFF757575)
             )
+        }
+    }
+}
+
+class HydrantOccupiedReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val hydrantId = intent.getStringExtra("hydrantId") ?: return
+        val hydrantName = intent.getStringExtra("hydrantName") ?: ""
+        val municipality = intent.getStringExtra("municipality") ?: return
+        val occupiedBy = intent.getStringExtra("occupiedBy") ?: ""
+        val notifId = intent.getIntExtra("notifId", 0)
+
+        // Dismiss the notification
+        NotificationManagerCompat.from(context).cancel(notifId)
+
+        val rtdb = com.google.firebase.database.FirebaseDatabase
+            .getInstance("https://firegrid-58bc3-default-rtdb.asia-southeast1.firebasedatabase.app/")
+        val ref = rtdb.getReference("fire_hydrants").child(municipality).child(hydrantId)
+
+        when (intent.action) {
+            "ACTION_ACKNOWLEDGE" -> {
+                // Schedule another notification in 1 hour
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                val scheduleIntent = Intent(context, HydrantOccupiedReceiver::class.java).apply {
+                    action = "ACTION_FIRE_NOTIFICATION"
+                    putExtra("hydrantId", hydrantId)
+                    putExtra("hydrantName", hydrantName)
+                    putExtra("municipality", municipality)
+                    putExtra("occupiedBy", occupiedBy)
+                    putExtra("notifId", notifId)
+                }
+                val pi = PendingIntent.getBroadcast(
+                    context, notifId + 10, scheduleIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val triggerAt = System.currentTimeMillis() + 60 * 60 * 1000L // 1 hour
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi)
+                } else {
+                    alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi)
+                }
+
+                // Also schedule auto-release if ignored (10 mins after the next notif fires)
+                // i.e., 1hr + 10min from now
+                scheduleAutoRelease(context, hydrantId, hydrantName, municipality, notifId,
+                    delayMs = (60 + 10) * 60 * 1000L) // 1hr 10min (1hr until re-notif + 10min grace)
+            }
+
+            "ACTION_RELEASE", "ACTION_AUTO_RELEASE" -> {
+                // Cancel any pending alarms
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                val cancelAutoRelease = PendingIntent.getBroadcast(
+                    context, notifId + 20,
+                    Intent(context, HydrantOccupiedReceiver::class.java).apply { action = "ACTION_AUTO_RELEASE" },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val cancelRenotif = PendingIntent.getBroadcast(
+                    context, notifId + 10,
+                    Intent(context, HydrantOccupiedReceiver::class.java).apply { action = "ACTION_FIRE_NOTIFICATION" },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                alarmManager.cancel(cancelAutoRelease)
+                alarmManager.cancel(cancelRenotif)
+
+                // Release the hydrant in Firebase
+                val sdf = java.text.SimpleDateFormat(
+                    "MMMM dd, yyyy 'at' h:mm:ss a 'UTC+8'", java.util.Locale.ENGLISH
+                )
+                sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                val timestamp = sdf.format(java.util.Date())
+                ref.updateChildren(mapOf(
+                    "ServiceStatus" to "In Service",
+                    "LastUpdated" to timestamp,
+                    "OccupiedBy" to "",
+                    "OccupiedAt" to ""
+                ))
+                if (intent.action == "ACTION_AUTO_RELEASE") {
+                    // Show a silent info notification that it was auto-released
+                    val autoNotif = NotificationCompat.Builder(context, "hydrant_updates_channel")
+                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+                        .setContentTitle("Hydrant Auto-Released")
+                        .setContentText("$hydrantName in $municipality was automatically released.")
+                        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                        .setAutoCancel(true)
+                        .build()
+                    try { NotificationManagerCompat.from(context).notify(notifId + 99, autoNotif) }
+                    catch (e: SecurityException) { e.printStackTrace() }
+                }
+            }
+
+            "ACTION_FIRE_NOTIFICATION" -> {
+                // Re-fire the occupied notification after 1hr acknowledge
+                showHydrantOccupiedNotification(context, hydrantId, hydrantName, municipality, occupiedBy, "")
+                // Schedule auto-release 10 mins after this notification
+                scheduleAutoRelease(context, hydrantId, hydrantName, municipality, notifId,
+                    delayMs = 10 * 60 * 1000L) // 10 minutes after notification fires
+            }
+        }
+    }
+
+    private fun scheduleAutoRelease(
+        context: Context,
+        hydrantId: String,
+        hydrantName: String,
+        municipality: String,
+        notifId: Int,
+        delayMs: Long
+    ) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val autoReleaseIntent = Intent(context, HydrantOccupiedReceiver::class.java).apply {
+            action = "ACTION_AUTO_RELEASE"
+            putExtra("hydrantId", hydrantId)
+            putExtra("hydrantName", hydrantName)
+            putExtra("municipality", municipality)
+            putExtra("notifId", notifId)
+        }
+        val pi = PendingIntent.getBroadcast(
+            context, notifId + 20, autoReleaseIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val triggerAt = System.currentTimeMillis() + delayMs
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi)
+        } else {
+            alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi)
         }
     }
 }

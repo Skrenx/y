@@ -33,8 +33,14 @@ data class FireHydrant(
     var municipality: String = "",
 
     @get:PropertyName("LastUpdated") @set:PropertyName("LastUpdated")
-    var lastUpdated: String = ""  // Format: "January 10, 2026 at 3:33:09 PM UTC+8"
+    var lastUpdated: String = "",  // Format: "January 10, 2026 at 3:33:09 PM UTC+8"
+
+    @get:PropertyName("OccupiedBy") @set:PropertyName("OccupiedBy")
+    var occupiedBy: String = "",
+
+    @get:PropertyName("OccupiedAt") @set:PropertyName("OccupiedAt")
+    var occupiedAt: String = ""
 ) {
     // No-argument constructor required for Firebase
-    constructor() : this("", "", "", "", "", "", "In Service", "", "", "")
+    constructor() : this("", "", "", "", "", "", "In Service", "", "", "", "", "")
 }
