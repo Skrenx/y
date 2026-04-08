@@ -362,7 +362,9 @@ class FireHydrantViewModel : ViewModel() {
                 // Sort by numeric ID to ensure proper renumbering order
                 hydrantsToRenumber.sortBy { it.second }
 
-                // Renumber hydrants with zero-padded IDs
+                // Build one multi-path update map — fires listener ONCE on all devices
+                val multiPathUpdate = mutableMapOf<String, Any?>()
+
                 for (triple in hydrantsToRenumber) {
                     val oldId = triple.first
                     val oldIdNumber = triple.second
@@ -370,31 +372,28 @@ class FireHydrantViewModel : ViewModel() {
 
                     val newIdNumber = oldIdNumber - 1
                     val newId = generateZeroPaddedId(newIdNumber)
-
-                    // Auto-generate new hydrant name based on new ID
                     val newHydrantName = "Hydrant $newId"
-
-                    // Get formatted timestamp for the update
                     val formattedTimestamp = getFormattedTimestamp()
 
                     val data = childSnapshot.value
-
                     if (data != null && data is Map<*, *>) {
                         val updatedData = HashMap<String, Any?>()
                         for ((key, value) in data) {
-                            if (key is String) {
-                                updatedData[key] = value
-                            }
+                            if (key is String) updatedData[key] = value
                         }
                         updatedData["id"] = newId
                         updatedData["hydrantName"] = newHydrantName
+                        updatedData["HydrantName"] = newHydrantName
                         updatedData["lastUpdated"] = formattedTimestamp
 
-                        // Create new entry with zero-padded ID
-                        hydrantsRef.child(newId).setValue(updatedData).await()
-                        // Delete old entry
-                        hydrantsRef.child(oldId).removeValue().await()
+                        multiPathUpdate[newId] = updatedData   // write new node
+                        multiPathUpdate[oldId] = null          // null = delete old node
                     }
+                }
+
+// ONE atomic write — triggers listener exactly once on all devices
+                if (multiPathUpdate.isNotEmpty()) {
+                    hydrantsRef.updateChildren(multiPathUpdate).await()
                 }
 
                 _uiState.value = _uiState.value.copy(

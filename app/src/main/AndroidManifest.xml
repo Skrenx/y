@@ -112,6 +112,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.HYDRANT.Starting"
             android:exported="true">
             <intent-filter>
