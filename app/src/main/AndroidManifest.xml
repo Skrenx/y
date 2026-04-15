@@ -23,6 +23,7 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:allowBackup="true"
@@ -37,7 +38,7 @@
         <!-- Add Google Maps API Key here -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyCdwrCeDEi3tPzjg6-2lGNueLJqHJFv1ZQ"/>
+            android:value="AIzaSyDbIT2b0NN8WPhGrpa5H29sfGSwKAzdxUs"/>
 
         <!-- FileProvider for PDF sharing -->
         <provider
@@ -67,7 +68,8 @@
         <service
             android:name=".HydrantChangeListenerService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- =====================================================
              NEW: FIREFIGHTER LOCATION TRACKING SERVICE

@@ -190,6 +190,7 @@ data class DirectionStep(
     val instruction: String,
     val distance: String,
     val duration: String,
+    val durationSeconds: Int = 0,   // ← add this
     val startLocation: LatLng,
     val maneuver: String = ""
 )
@@ -333,7 +334,7 @@ val lagunaMunicipalities = listOf(
 
 // Directions API Function
 suspend fun fetchDirections(origin: LatLng, destination: LatLng): DirectionsResult? {
-    val apiKey = "AIzaSyCdwrCeDEi3tPzjg6-2lGNueLJqHJFv1ZQ"
+    val apiKey = "AIzaSyDbIT2b0NN8WPhGrpa5H29sfGSwKAzdxUs"
     val url = "https://maps.googleapis.com/maps/api/directions/json?" +
             "origin=${origin.latitude},${origin.longitude}" +
             "&destination=${destination.latitude},${destination.longitude}" +
@@ -412,6 +413,7 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
             val maneuver = step.optString("maneuver", "")
             val stepDistance = step.getJSONObject("distance").getString("text")
             val stepDuration = step.getJSONObject("duration").getString("text")
+            val stepDurationSeconds = step.getJSONObject("duration").getInt("value")  // ← add this
             val startLoc = step.getJSONObject("start_location")
             val startLatLng = LatLng(
                 startLoc.getDouble("lat"),
@@ -422,31 +424,9 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
                     instruction = instruction,
                     distance = stepDistance,
                     duration = stepDuration,
+                    durationSeconds = stepDurationSeconds,   // ← add this
                     startLocation = startLatLng,
                     maneuver = maneuver
-                )
-            )
-        }
-
-        for (i in 0 until stepsArray.length()) {
-            val step = stepsArray.getJSONObject(i)
-            val instruction = step.optString("html_instructions", "Continue")
-            val stepDistance = step.getJSONObject("distance").getString("text")
-            val maneuver2 = step.optString("maneuver", "")
-            val stepDuration = step.getJSONObject("duration").getString("text")
-            val startLoc = step.getJSONObject("start_location")
-            val startLatLng = LatLng(
-                startLoc.getDouble("lat"),
-                startLoc.getDouble("lng")
-            )
-
-            steps.add(
-                DirectionStep(
-                    instruction = instruction,
-                    distance = stepDistance,
-                    duration = stepDuration,
-                    startLocation = startLatLng,
-                    maneuver = maneuver2
                 )
             )
         }
@@ -460,6 +440,17 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
     } catch (e: Exception) {
         e.printStackTrace()
         null
+    }
+}
+
+fun formatRemainingDuration(totalSeconds: Int): String {
+    val hours = totalSeconds / 3600
+    val mins = (totalSeconds % 3600) / 60
+    return when {
+        hours > 0 && mins > 0 -> "$hours hr $mins min"
+        hours > 0 -> "$hours hr"
+        mins > 0 -> "$mins min"
+        else -> "< 1 min"
     }
 }
 
@@ -635,7 +626,6 @@ fun sendHydrantChangeNotificationToAdmins(
     municipality: String,
     performedBy: String
 ) {
-    val firestore = Firebase.firestore
     val title = when (changeType) {
         "added"   -> "🆕 Hydrant Added"
         "deleted" -> "🗑️ Hydrant Deleted"
@@ -646,21 +636,7 @@ fun sendHydrantChangeNotificationToAdmins(
         "deleted" -> "$hydrantName deleted in $municipality by $performedBy"
         else      -> "$hydrantName updated in $municipality by $performedBy"
     }
-    firestore.collection("hydrant_notifications")
-        .add(hashMapOf(
-            "title"        to title,
-            "message"      to message,
-            "changeType"   to changeType,
-            "hydrantId"    to hydrantId,
-            "hydrantName"  to hydrantName,
-            "municipality" to municipality,
-            "performedBy"  to performedBy,
-            "timestamp"    to com.google.firebase.Timestamp.now(),
-            "seen"         to false
-        ))
-        .addOnFailureListener { e ->
-            android.util.Log.e("HydrantNotif", "Failed to send notification", e)
-        }
+    showHydrantChangeNotification(context, title, message)
 }
 
 /**
@@ -1000,18 +976,26 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
 
-        // ✅ REMOVED: Do NOT start LogoutService - it exits the app
-        // startService(Intent(this, LogoutService::class.java))
-
-        // ✅ Keep this: Start the hydrant change listener service
-        startService(Intent(this, HydrantChangeListenerService::class.java))
-
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             HYDRANTTheme {
                 HYDRANTApp()
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        stopService(Intent(this, HydrantChangeListenerService::class.java))
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(Intent(this, HydrantChangeListenerService::class.java))
+        } else {
+            startService(Intent(this, HydrantChangeListenerService::class.java))
         }
     }
 }
@@ -3407,7 +3391,15 @@ fun EditFireHydrantScreen(
     // Handle update success
     LaunchedEffect(hydrantUiState.updateSuccess) {
         if (hydrantUiState.updateSuccess) {
-            val currentUserEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown"
+            val currentUser = FirebaseAuth.getInstance().currentUser
+            val currentUserEmail = currentUser?.email?.lowercase() ?: "Unknown"
+            val adminDisplayName = try {
+                val userDoc = Firebase.firestore.collection("users")
+                    .document(currentUserEmail).get().await()
+                userDoc.getString("displayName")?.takeIf { it.isNotBlank() }
+                    ?: currentUser?.displayName?.takeIf { it.isNotBlank() }
+                    ?: currentUserEmail
+            } catch (e: Exception) { currentUserEmail }
             logHydrantChange(
                 context = context,
                 changeType = "updated",
@@ -3420,7 +3412,7 @@ fun EditFireHydrantScreen(
                 newStatus = serviceStatus,
                 remarks = remarks,
                 municipality = hydrant.municipality,
-                performedBy = currentUserEmail,
+                performedBy = adminDisplayName,
                 changedFields = buildMap {
                     if (exactLocation != hydrant.exactLocation)
                         put("exactLocation", Pair(hydrant.exactLocation, exactLocation))
@@ -3443,7 +3435,7 @@ fun EditFireHydrantScreen(
                 hydrantId = hydrant.id,
                 hydrantName = hydrant.hydrantName,
                 municipality = hydrant.municipality,
-                performedBy = currentUserEmail
+                performedBy = adminDisplayName
             )
 
             snackbarHostState.showSnackbar("Fire hydrant updated successfully!")
@@ -3456,7 +3448,15 @@ fun EditFireHydrantScreen(
     // Handle delete success
     LaunchedEffect(hydrantUiState.deleteSuccess) {
         if (hydrantUiState.deleteSuccess) {
-            val currentUserEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown"
+            val currentUser = FirebaseAuth.getInstance().currentUser
+            val currentUserEmail = currentUser?.email?.lowercase() ?: "Unknown"
+            val adminDisplayName = try {
+                val userDoc = Firebase.firestore.collection("users")
+                    .document(currentUserEmail).get().await()
+                userDoc.getString("displayName")?.takeIf { it.isNotBlank() }
+                    ?: currentUser?.displayName?.takeIf { it.isNotBlank() }
+                    ?: currentUserEmail
+            } catch (e: Exception) { currentUserEmail }
             logHydrantChange(
                 context = context,
                 changeType = "deleted",
@@ -3469,7 +3469,7 @@ fun EditFireHydrantScreen(
                 newStatus = hydrant.serviceStatus,
                 remarks = hydrant.remarks,
                 municipality = hydrant.municipality,
-                performedBy = currentUserEmail
+                performedBy = adminDisplayName
             )
 
             sendHydrantChangeNotificationToAdmins(
@@ -3478,7 +3478,7 @@ fun EditFireHydrantScreen(
                 hydrantId = hydrant.id,
                 hydrantName = hydrant.hydrantName,
                 municipality = hydrant.municipality,
-                performedBy = currentUserEmail
+                performedBy = adminDisplayName
             )
 
             snackbarHostState.showSnackbar("Fire hydrant deleted successfully!")
@@ -3912,7 +3912,15 @@ fun AddFireHydrantScreen(
     LaunchedEffect(hydrantUiState.addSuccess) {
         if (hydrantUiState.addSuccess) {
             // ✅ Log the addition to Firestore
-            val currentUserEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown"
+            val currentUser = FirebaseAuth.getInstance().currentUser
+            val currentUserEmail = currentUser?.email?.lowercase() ?: "Unknown"
+            val adminDisplayName = try {
+                val userDoc = Firebase.firestore.collection("users")
+                    .document(currentUserEmail).get().await()
+                userDoc.getString("displayName")?.takeIf { it.isNotBlank() }
+                    ?: currentUser?.displayName?.takeIf { it.isNotBlank() }
+                    ?: currentUserEmail
+            } catch (e: Exception) { currentUserEmail }
             logHydrantChange(
                 context = context,
                 changeType = "added",
@@ -3925,7 +3933,7 @@ fun AddFireHydrantScreen(
                 newStatus = serviceStatus,
                 remarks = remarks,
                 municipality = municipalityName,
-                performedBy = currentUserEmail
+                performedBy = adminDisplayName
             )
 
             sendHydrantChangeNotificationToAdmins(
@@ -3934,7 +3942,7 @@ fun AddFireHydrantScreen(
                 hydrantId = hydrantUiState.lastAddedHydrantName,
                 hydrantName = hydrantUiState.lastAddedHydrantName,
                 municipality = municipalityName,
-                performedBy = currentUserEmail
+                performedBy = adminDisplayName
             )
 
             snackbarHostState.showSnackbar("Fire hydrant added successfully!")
@@ -7534,6 +7542,15 @@ fun MapScreen(
 
     // Directions state
     var directionsResult by remember { mutableStateOf<DirectionsResult?>(null) }
+
+// ← Insert here:
+    val remainingDuration by remember(currentStepIndex, directionsResult) {
+        derivedStateOf {
+            val steps = directionsResult?.steps ?: emptyList()
+            val totalSecs = steps.drop(currentStepIndex).sumOf { it.durationSeconds }
+            if (totalSecs > 0) formatRemainingDuration(totalSecs) else directionsResult?.duration ?: ""
+        }
+    }
     var userCurrentLocation by remember { mutableStateOf<LatLng?>(null) }
     var userCurrentBearing by remember { mutableStateOf(0f) }
     var isLoadingDirections by remember { mutableStateOf(false) }
@@ -7584,12 +7601,25 @@ fun MapScreen(
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
 
     LaunchedEffect(hydrantUiState.allHydrants, hydrantUiState.hydrants) {
-        val current = selectedHydrantForCard ?: return@LaunchedEffect
-        val updated = (hydrantUiState.allHydrants + hydrantUiState.hydrants).find {
-            it.id == current.id && it.municipality == current.municipality
+        val allHydrants = hydrantUiState.allHydrants + hydrantUiState.hydrants
+
+        val current = selectedHydrantForCard
+        if (current != null) {
+            val updated = allHydrants.find { it.id == current.id && it.municipality == current.municipality }
+            if (updated != null && updated != current) {
+                selectedHydrantForCard = updated
+            }
         }
-        if (updated != null && updated != current) {
-            selectedHydrantForCard = updated
+
+        // Also keep nearestHydrant in sync so the search card updates too
+        val currentNearest = nearestHydrant
+        if (currentNearest != null) {
+            val updatedNearest = allHydrants.find {
+                it.id == currentNearest.id && it.municipality == currentNearest.municipality
+            }
+            if (updatedNearest != null && updatedNearest != currentNearest) {
+                nearestHydrant = updatedNearest
+            }
         }
     }
 
@@ -8278,7 +8308,7 @@ fun MapScreen(
     }
 
     // Auto-advance navigation steps + Google Maps-style voice announcements
-    LaunchedEffect(isNavigating, userCurrentLocation) {
+    LaunchedEffect(isNavigating, userCurrentLocation, currentStepIndex) {
         if (!isNavigating || directionsResult == null || userCurrentLocation == null) return@LaunchedEffect
 
         val steps = directionsResult!!.steps
@@ -8345,6 +8375,23 @@ fun MapScreen(
                         durationMs = 300
                     )
                 }
+            }
+        } else {
+            // Last step — use the destination location directly
+            val destLat = directionsResult!!.polylinePoints.last().latitude
+            val destLon = directionsResult!!.polylinePoints.last().longitude
+            val r = 6371
+            val dLat = Math.toRadians(destLat - lat1)
+            val dLon = Math.toRadians(destLon - lon1)
+            val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                    Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(destLat)) *
+                    Math.sin(dLon / 2) * Math.sin(dLon / 2)
+            val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+            val distanceToNext = (r * c) * 1000 // meters
+
+            if (distanceToNext < 20.0 && tts != null) {
+                tts?.speak("You have arrived at your destination", android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "arrived")
+                isNavigating = false
             }
         }
     }
@@ -9810,15 +9857,21 @@ fun MapScreen(
 
                                             // Status indicator
                                             Surface(
-                                                color = if (hydrant.serviceStatus == "In Service")
-                                                    Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
+                                                color = when (hydrant.serviceStatus) {
+                                                    "In Service" -> Color(0xFFE8F5E9)
+                                                    "Occupied"   -> Color(0xFFFFF3E0)
+                                                    else         -> Color(0xFFFFEBEE)
+                                                },
                                                 shape = RoundedCornerShape(12.dp)
                                             ) {
                                                 Icon(
                                                     Icons.Default.LocationOn,
                                                     contentDescription = null,
-                                                    tint = if (hydrant.serviceStatus == "In Service")
-                                                        Color(0xFF4CAF50) else Color(0xFFEF5350),
+                                                    tint = when (hydrant.serviceStatus) {
+                                                        "In Service" -> Color(0xFF4CAF50)
+                                                        "Occupied"   -> Color(0xFFFF9800)
+                                                        else         -> Color(0xFFEF5350)
+                                                    },
                                                     modifier = Modifier
                                                         .padding(6.dp)
                                                         .size(20.dp)
@@ -11150,7 +11203,11 @@ fun MapScreen(
 
                         // Status badge
                         Surface(
-                            color = if (nearestHydrant!!.serviceStatus == "In Service") Color(0xFF4CAF50) else Color(0xFFEF5350),
+                            color = when (nearestHydrant!!.serviceStatus) {
+                                "In Service" -> Color(0xFF4CAF50)
+                                "Occupied"   -> Color(0xFFFF9800)
+                                else         -> Color(0xFFEF5350)
+                            },
                             shape = RoundedCornerShape(20.dp)
                         ) {
                             Text(
@@ -11207,11 +11264,7 @@ fun MapScreen(
                                             fontWeight = FontWeight.SemiBold
                                         )
                                         Text(
-                                            text = directionsResult!!.duration
-                                                .replace("hours", "hrs")
-                                                .replace("hour", "hr")
-                                                .replace("mins", "min")
-                                                .replace("minutes", "min"),
+                                            text = remainingDuration,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = Color(0xFF1976D2),
                                             fontWeight = FontWeight.Medium
@@ -11353,6 +11406,42 @@ fun MapScreen(
                             }
                         }
                     }
+
+                    // Occupy / Release button in search card only
+                    if (isCardAdmin &&
+                        selectedSearchHydrant != null &&
+                        (nearestHydrant!!.serviceStatus == "In Service" ||
+                                nearestHydrant!!.serviceStatus == "Occupied")
+                    ) {
+                        val isOccupied = nearestHydrant!!.serviceStatus == "Occupied"
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                selectedHydrantForCard = nearestHydrant
+                                showOccupyConfirmDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                            ),
+                            border = BorderStroke(1.dp, if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)),
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = if (isOccupied) "Release Hydrant" else "Occupy Hydrant",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
                 }
             }
         }
@@ -11463,17 +11552,25 @@ fun MapScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column {
+                            var currentTimeStr by remember { mutableStateOf(
+                                java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                            ) }
+                            LaunchedEffect(isNavigating) {
+                                while (isNavigating) {
+                                    currentTimeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                                        .format(java.util.Date())
+                                    kotlinx.coroutines.delay(30_000L) // refresh every 30 seconds
+                                }
+                            }
+
                             Text(
-                                text = directionsResult!!.duration,
+                                text = remainingDuration,
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1B5E20)
                             )
                             Text(
-                                text = "${directionsResult!!.distance} • ${
-                                    java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-                                        .format(java.util.Date())
-                                }",
+                                text = "${directionsResult!!.distance} • $currentTimeStr",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.Gray
                             )
@@ -11913,7 +12010,6 @@ fun MapScreen(
                             )
                         }
                     }
-                    HorizontalDivider(Modifier.padding(vertical = 4.dp, horizontal = 16.dp), color = Color(0xFFE0E0E0))
 
                     // Reset
                     Surface(
@@ -12064,6 +12160,8 @@ fun MapScreen(
                         }
                     }
 
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp, horizontal = 16.dp), color = Color(0xFFE0E0E0))
+
                     Text(
                         "Map Legend",
                         style = MaterialTheme.typography.labelLarge,
@@ -12098,9 +12196,11 @@ fun MapScreen(
                         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.LocationOn, null, tint = Color(0xFFFF5722), modifier = Modifier.size(24.dp))
-                        Spacer(Modifier.width(16.dp))
-                        Text("Fire Incident Location")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.LocationOn, null, tint = Color(0xFFFF9800), modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.width(16.dp))
+                            Text("Occupied")
+                        }
                     }
                     Spacer(Modifier.weight(1f))
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = Color(0xFFE0E0E0))
