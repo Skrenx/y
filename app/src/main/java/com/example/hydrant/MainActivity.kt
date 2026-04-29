@@ -1,190 +1,204 @@
 package com.example.hydrant
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.view.WindowCompat
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Directions
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewScreenSizes
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.hydrant.ui.theme.HYDRANTTheme
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.MapProperties
-import com.google.maps.android.compose.MapUiSettings
-import com.google.maps.android.compose.rememberCameraPositionState
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.hydrant.viewmodel.AuthViewModel
-import com.example.hydrant.viewmodel.FireHydrantViewModel
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.userProfileChangeRequest
-import kotlinx.coroutines.launch
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.maps.CameraUpdateFactory
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Directions
-import androidx.activity.compose.BackHandler
-import com.google.firebase.auth.EmailAuthProvider
-import android.content.Intent
-import com.google.maps.android.compose.Polyline
-import org.json.JSONObject
-import java.net.URL
-import java.net.HttpURLConnection
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.Image
-import androidx.compose.ui.res.painterResource
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.layout.ContentScale
-import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
-import com.example.hydrant.model.FireHydrant
-import android.graphics.pdf.PdfDocument
-import android.graphics.Paint
-import android.graphics.Typeface
-import java.io.File
-import java.io.FileOutputStream
-import androidx.core.content.FileProvider
-import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.PopupProperties
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import android.content.pm.PackageManager
-import android.app.PendingIntent
-import android.media.RingtoneManager
-import android.content.Context
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.AccountBox
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.SearchOff
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.LocationCity
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.border
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.hydrant.model.FireHydrant
+import com.example.hydrant.ui.theme.HYDRANTTheme
+import com.example.hydrant.viewmodel.AuthViewModel
+import com.example.hydrant.viewmodel.FireHydrantViewModel
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.userProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.ui.graphics.Brush
-import android.widget.Toast
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.draw.rotate
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
+import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.ktx.Firebase
+import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapUiSettings
+import com.google.maps.android.compose.Polyline
+import com.google.maps.android.compose.rememberCameraPositionState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.ui.draw.rotate
-import androidx.compose.animation.core.LinearOutSlowInEasing
-import androidx.compose.animation.core.spring
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.window.PopupProperties
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.ui.input.pointer.PointerEventPass
 import kotlinx.coroutines.tasks.await
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 data class DirectionStep(
     val instruction: String,
@@ -1005,30 +1019,36 @@ class MainActivity : ComponentActivity() {
 fun HYDRANTApp() {
     val auth = FirebaseAuth.getInstance()
 
-    var logoutTrigger by remember { mutableStateOf(0) }
-    var isSigningUp by remember { mutableStateOf(false) } // ✅ NEW: Prevent premature navigation
+    var isSigningUp by remember { mutableStateOf(false) }
 
-    // ✅ Only check auth if not in signup process
-    val isLoggedIn = remember(logoutTrigger, isSigningUp) {
+    var isLoggedIn by remember { mutableStateOf(
         !isSigningUp && auth.currentUser != null && auth.currentUser?.email != null
+    ) }
+
+    DisposableEffect(Unit) {
+        val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            isLoggedIn = !isSigningUp && firebaseAuth.currentUser != null && firebaseAuth.currentUser?.email != null
+        }
+        auth.addAuthStateListener(listener)
+        onDispose { auth.removeAuthStateListener(listener) }
     }
 
     var showSignUp by remember { mutableStateOf(false) }
     var signUpSuccessMessage by remember { mutableStateOf<String?>(null) }
 
-    val userName = auth.currentUser?.displayName ?: "Full Name"
-
     when {
-        isLoggedIn -> MainApp(
-            userName = userName,
-            onLogout = {
-                FirebaseAuth.getInstance().signOut()
-                logoutTrigger++
-                showSignUp = false
-                signUpSuccessMessage = null
-                isSigningUp = false
-            }
-        )
+        isLoggedIn -> {
+            val userName = auth.currentUser?.displayName ?: "Full Name"
+            MainApp(
+                userName = userName,
+                onLogout = {
+                    FirebaseAuth.getInstance().signOut()
+                    showSignUp = false
+                    signUpSuccessMessage = null
+                    isSigningUp = false
+                }
+            )
+        }
         showSignUp -> {
             // ✅ Set isSigningUp when showing signup screen
             LaunchedEffect(Unit) {
@@ -1036,9 +1056,7 @@ fun HYDRANTApp() {
             }
             SignUpScreen(
                 onSignUpSuccess = {
-                    // ✅ Called when Firestore write completes successfully
                     isSigningUp = false
-                    logoutTrigger++  // Now trigger navigation
                 },
                 onBackToLogin = {
                     showSignUp = false
@@ -1053,7 +1071,6 @@ fun HYDRANTApp() {
         }
         else -> LoginScreen(
             onLoginSuccess = {
-                logoutTrigger++
                 signUpSuccessMessage = null
             },
             onNavigateToSignUp = {
@@ -1701,7 +1718,10 @@ fun SignUpScreen(
                         label = { Text("Password") },
                         singleLine = true,
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Next
+                        ),
                         trailingIcon = {
                             val slashProgress = remember { Animatable(if (passwordVisible) 0f else 1f) }
 
@@ -1767,8 +1787,8 @@ fun SignUpScreen(
                 }
 
                 // ✅ MODIFIED: Only show password hint when field is focused
-                if (isPasswordFocused) {
-                    item {
+                item {
+                    AnimatedVisibility(visible = isPasswordFocused) {
                         Text(
                             text = "Password must have: 12 characters, 1 uppercase, 1 number, 1 special character",
                             style = MaterialTheme.typography.bodySmall,
@@ -1791,7 +1811,10 @@ fun SignUpScreen(
                         label = { Text("Confirm Password") },
                         singleLine = true,
                         visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
                         trailingIcon = {
                             val slashProgress = remember { Animatable(if (confirmPasswordVisible) 0f else 1f) }
 
@@ -1954,6 +1977,10 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
     val firestore = Firebase.firestore
 
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
+
+// Global location — tracks GPS state across the whole app
+    var globalUserLocation by remember { mutableStateOf<LatLng?>(null) }
+    var isGlobalLocationEnabled by remember { mutableStateOf(false) }
     var selectedMunicipality by rememberSaveable { mutableStateOf<String?>(null) }
     var showAddHydrantScreen by rememberSaveable { mutableStateOf(false) }
     var showHydrantListScreen by rememberSaveable { mutableStateOf(false) }
@@ -2035,6 +2062,59 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
     val sharedHydrantViewModel: FireHydrantViewModel = viewModel()
     LaunchedEffect(Unit) {
         sharedHydrantViewModel.loadAllHydrants()
+    }
+
+    // App-wide GPS tracking: shows location when GPS is ON, clears it when OFF
+    DisposableEffect(Unit) {
+        if (!checkLocationPermission(context)) return@DisposableEffect onDispose {}
+
+        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+        val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2000L
+        ).setMinUpdateIntervalMillis(1000L).build()
+
+        val callback = object : com.google.android.gms.location.LocationCallback() {
+            override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                result.lastLocation?.let { loc ->
+                    globalUserLocation = LatLng(loc.latitude, loc.longitude)
+                    isGlobalLocationEnabled = true
+                }
+            }
+        }
+
+        val gpsReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: android.content.Context, intent: Intent) {
+                val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+                if (lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)) {
+                    try {
+                        fusedClient.requestLocationUpdates(locationRequest, callback, android.os.Looper.getMainLooper())
+                    } catch (e: SecurityException) { }
+                } else {
+                    fusedClient.removeLocationUpdates(callback)
+                    globalUserLocation = null
+                    isGlobalLocationEnabled = false
+                }
+            }
+        }
+
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        if (lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)) {
+            try {
+                fusedClient.requestLocationUpdates(locationRequest, callback, android.os.Looper.getMainLooper())
+            } catch (e: SecurityException) { }
+        }
+
+        context.registerReceiver(
+            gpsReceiver,
+            android.content.IntentFilter(android.location.LocationManager.PROVIDERS_CHANGED_ACTION)
+        )
+
+        onDispose {
+            fusedClient.removeLocationUpdates(callback)
+            try { context.unregisterReceiver(gpsReceiver) } catch (e: Exception) { }
+            globalUserLocation = null
+            isGlobalLocationEnabled = false
+        }
     }
 
     LaunchedEffect(backPressedOnce) {
@@ -2214,79 +2294,89 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavigationSuiteScaffold(
-        navigationSuiteItems = {
-            AppDestinations.entries.forEach { destination ->
-                item(
-                    icon = { Icon(destination.icon, contentDescription = destination.label) },
-                    label = { Text(destination.label) },
-                    selected = destination == currentDestination,
-                    onClick = { currentDestination = destination }
-                )
+            navigationSuiteItems = {
+                AppDestinations.entries.forEach { destination ->
+                    item(
+                        icon = { Icon(destination.icon, contentDescription = destination.label) },
+                        label = { Text(destination.label) },
+                        selected = destination == currentDestination,
+                        onClick = { currentDestination = destination }
+                    )
+                }
             }
-        }
-    ) {
-        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-            Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
+        ) {
+            Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                Box(modifier = Modifier
+                    .padding(bottom = innerPadding.calculateBottomPadding())
+                    .fillMaxSize()) {
 
-                // MapScreen — always alive, just hidden when another tab is active
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            alpha = if (currentDestination == AppDestinations.MAP) 1f else 0f
-                        }
-                        .then(
-                            if (currentDestination != AppDestinations.MAP)
-                                Modifier.pointerInput(Unit) { awaitPointerEventScope { while (true) { awaitPointerEvent(pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial).changes.forEach { it.consume() } } } }
-                            else
-                                Modifier
+                    // MapScreen — always alive, just hidden when another tab is active
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                alpha = if (currentDestination == AppDestinations.MAP) 1f else 0f
+                            }
+                            .then(
+                                if (currentDestination != AppDestinations.MAP)
+                                    Modifier.pointerInput(Unit) {
+                                        awaitPointerEventScope {
+                                            while (true) {
+                                                awaitPointerEvent(pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial).changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    }
+                                else
+                                    Modifier
+                            )
+                    ) {
+                        MapScreen(
+                            modifier = Modifier.fillMaxSize(),
+                            initialIncidentLocation = if (navigateToMapWithIncident) incidentLocationForMap else null,
+                            onIncidentHandled = {
+                                navigateToMapWithIncident = false
+                                incidentLocationForMap = null
+                            },
+                            onMailClick = { showMailScreen = true },
+                            initialHydrantForNavigate = pendingHydrantNavigate,
+                            onHydrantNavigateHandled = { pendingHydrantNavigate = null },
+                            initialHydrantForDirections = pendingHydrantDirections,
+                            onHydrantDirectionsHandled = { pendingHydrantDirections = null },
+                            adminType = adminType,
+                            adminMunicipality = municipalityName,
+                            externalUserLocation = globalUserLocation,
+                            isExternalLocationEnabled = isGlobalLocationEnabled
                         )
-                ) {
-                    MapScreen(
-                        modifier = Modifier.fillMaxSize(),
-                        initialIncidentLocation = if (navigateToMapWithIncident) incidentLocationForMap else null,
-                        onIncidentHandled = {
-                            navigateToMapWithIncident = false
-                            incidentLocationForMap = null
-                        },
-                        onMailClick = { showMailScreen = true },
-                        initialHydrantForNavigate = pendingHydrantNavigate,
-                        onHydrantNavigateHandled = { pendingHydrantNavigate = null },
-                        initialHydrantForDirections = pendingHydrantDirections,
-                        onHydrantDirectionsHandled = { pendingHydrantDirections = null },
-                        adminType = adminType,
-                        adminMunicipality = municipalityName
-                    )
-                }
+                    }
 
-                // Home and Profile are lightweight — only compose when active
-                when (currentDestination) {
-                    AppDestinations.HOME -> FavoritesScreen(
-                        modifier = Modifier.fillMaxSize(),
-                        scrollState = favoritesScrollState,
-                        onMunicipalityClick = { municipality ->
-                            selectedMunicipality = municipality
-                        }
-                    )
-                    AppDestinations.PROFILE -> ProfileScreen(
-                        modifier = Modifier.fillMaxSize(),
-                        userName = userName,
-                        userEmail = userEmail,
-                        adminType = adminType,
-                        municipalityName = municipalityName,
-                        isCheckingAdmin = isCheckingAdmin,
-                        onLogout = onLogout,
-                        onSettingsClick = { showSettingsScreen = true },
-                        onHelpFaqClick = { showHelpFaqScreen = true },
-                        onContactSupportClick = { showContactSupportScreen = true },
-                        onReportProblemClick = { showReportProblemScreen = true },
-                        onAboutAppClick = { showAboutAppScreen = true },
-                        onTermsPrivacyClick = { showTermsPrivacyScreen = true }
-                    )
-                    else -> {}
+                    // Home and Profile are lightweight — only compose when active
+                    when (currentDestination) {
+                        AppDestinations.HOME -> FavoritesScreen(
+                            modifier = Modifier.fillMaxSize(),
+                            scrollState = favoritesScrollState,
+                            onMunicipalityClick = { municipality ->
+                                selectedMunicipality = municipality
+                            }
+                        )
+                        AppDestinations.PROFILE -> ProfileScreen(
+                            modifier = Modifier.fillMaxSize(),
+                            userName = userName,
+                            userEmail = userEmail,
+                            adminType = adminType,
+                            municipalityName = municipalityName,
+                            isCheckingAdmin = isCheckingAdmin,
+                            onLogout = onLogout,
+                            onSettingsClick = { showSettingsScreen = true },
+                            onHelpFaqClick = { showHelpFaqScreen = true },
+                            onContactSupportClick = { showContactSupportScreen = true },
+                            onReportProblemClick = { showReportProblemScreen = true },
+                            onAboutAppClick = { showAboutAppScreen = true },
+                            onTermsPrivacyClick = { showTermsPrivacyScreen = true }
+                        )
+                        else -> {}
+                    }
                 }
             }
-        }
         }
 
         // ── OVERLAY SCREENS: rendered on top, MapScreen stays alive underneath ──
@@ -2321,173 +2411,178 @@ fun MainApp(userName: String, onLogout: () -> Unit) {
                     TermsPrivacyScreen(onBack = { showTermsPrivacyScreen = false })
                 }
             }
-        showAddAdminScreen -> {
-            BackHandler {
-                showAddAdminScreen = false
-                showSettingsScreen = true
-            }
-            AddAdminScreen(
-                onBack = {
+            showAddAdminScreen -> {
+                BackHandler {
                     showAddAdminScreen = false
                     showSettingsScreen = true
-                },
-                onSuccess = { email ->
-                    showAddAdminScreen = false
-                    showSettingsScreen = true
-                    android.widget.Toast.makeText(context, "$email has been promoted to admin!", android.widget.Toast.LENGTH_LONG).show()
-                },
-                isChiefAdmin = adminType == "CHIEF_ADMINISTRATOR"
-            )
-        }
-        showRemoveAdminScreen -> {
-            BackHandler {
-                showRemoveAdminScreen = false
-                showSettingsScreen = true
-            }
-            RemoveAdminScreen(
-                onBack = {
-                    showRemoveAdminScreen = false
-                    showSettingsScreen = true
-                },
-                onSuccess = { email ->
-                    showRemoveAdminScreen = false
-                    showSettingsScreen = true
-                    android.widget.Toast.makeText(context, "$email has been removed from admin!", android.widget.Toast.LENGTH_LONG).show()
-                },
-                isChiefAdmin = adminType == "CHIEF_ADMINISTRATOR"
-            )
-        }
-        showSettingsScreen -> {
-            BackHandler { showSettingsScreen = false }
-            SettingsScreen(
-                onBack = { showSettingsScreen = false },
-                onAddAdminClick = {
-                    showSettingsScreen = false
-                    showAddAdminScreen = true
-                },
-                onRemoveAdminClick = {
-                    showSettingsScreen = false
-                    showRemoveAdminScreen = true
-                },
-                onLogout = onLogout,
-                isAdmin = adminType.isNotEmpty(),
-                isCheckingAdmin = isCheckingAdmin
-            )
-        }
-        showMailScreen -> {
-            BackHandler { showMailScreen = false }
-            FireIncidentReportsScreen(
-                onBack = { showMailScreen = false },
-                onViewOnMap = { lat, lng ->
-                    showMailScreen = false
-                    incidentLocationForMap = Pair(lat, lng)
-                    navigateToMapWithIncident = true
-                    currentDestination = AppDestinations.MAP
                 }
-            )
+                AddAdminScreen(
+                    onBack = {
+                        showAddAdminScreen = false
+                        showSettingsScreen = true
+                    },
+                    onSuccess = { email ->
+                        showAddAdminScreen = false
+                        showSettingsScreen = true
+                        android.widget.Toast.makeText(context, "$email has been promoted to admin!", android.widget.Toast.LENGTH_LONG).show()
+                    },
+                    isChiefAdmin = adminType == "CHIEF_ADMINISTRATOR"
+                )
+            }
+            showRemoveAdminScreen -> {
+                BackHandler {
+                    showRemoveAdminScreen = false
+                    showSettingsScreen = true
+                }
+                RemoveAdminScreen(
+                    onBack = {
+                        showRemoveAdminScreen = false
+                        showSettingsScreen = true
+                    },
+                    onSuccess = { email ->
+                        showRemoveAdminScreen = false
+                        showSettingsScreen = true
+                        android.widget.Toast.makeText(context, "$email has been removed from admin!", android.widget.Toast.LENGTH_LONG).show()
+                    },
+                    isChiefAdmin = adminType == "CHIEF_ADMINISTRATOR"
+                )
+            }
+            showSettingsScreen -> {
+                BackHandler { showSettingsScreen = false }
+                SettingsScreen(
+                    onBack = { showSettingsScreen = false },
+                    onAddAdminClick = {
+                        showSettingsScreen = false
+                        showAddAdminScreen = true
+                    },
+                    onRemoveAdminClick = {
+                        showSettingsScreen = false
+                        showRemoveAdminScreen = true
+                    },
+                    onLogout = onLogout,
+                    isAdmin = adminType.isNotEmpty(),
+                    isCheckingAdmin = isCheckingAdmin
+                )
+            }
+            showMailScreen -> {
+                BackHandler { showMailScreen = false }
+                FireIncidentReportsScreen(
+                    onBack = { showMailScreen = false },
+                    onViewOnMap = { lat, lng ->
+                        showMailScreen = false
+                        incidentLocationForMap = Pair(lat, lng)
+                        navigateToMapWithIncident = true
+                        currentDestination = AppDestinations.MAP
+                    }
+                )
+            }
+            selectedHydrantForView != null -> {
+                BackHandler { selectedHydrantForView = null }
+                ViewHydrantLocationScreen(
+                    hydrant = selectedHydrantForView!!,
+                    onBack = { selectedHydrantForView = null },
+                    onNavigate = { hydrant ->
+                        selectedHydrantForView = null
+                        showHydrantListScreen = false
+                        showHydrantMapScreen = false
+                        showAddHydrantScreen = false
+                        selectedMunicipality = null
+                        pendingHydrantNavigate = hydrant
+                        currentDestination = AppDestinations.MAP
+                    },
+                    onDirections = { hydrant ->
+                        selectedHydrantForView = null
+                        showHydrantListScreen = false
+                        showHydrantMapScreen = false
+                        showAddHydrantScreen = false
+                        selectedMunicipality = null
+                        pendingHydrantDirections = hydrant
+                        currentDestination = AppDestinations.MAP
+                    },
+                    isAdmin = adminType.isNotEmpty()   // ← ADD THIS LINE
+                )
+            }
+            selectedHydrantForEdit != null && selectedMunicipality != null -> {
+                BackHandler { selectedHydrantForEdit = null }
+                EditFireHydrantScreen(
+                    hydrant = selectedHydrantForEdit!!,
+                    onBack = { selectedHydrantForEdit = null },
+                    onSuccess = { selectedHydrantForEdit = null },
+                    onDelete = { selectedHydrantForEdit = null }
+                )
+            }
+            showHydrantMapScreen && selectedMunicipality != null -> {
+                BackHandler { showHydrantMapScreen = false }
+                FireHydrantMapScreen(
+                    municipalityName = selectedMunicipality!!,
+                    onBack = { showHydrantMapScreen = false },
+                    onShowInvalidCoordinates = {
+                        showInvalidCoordinatesOnly = true
+                        showHydrantMapScreen = false
+                        showHydrantListScreen = true
+                    },
+                    onNavigate = { hydrant ->
+                        showHydrantMapScreen = false
+                        showHydrantListScreen = false
+                        selectedMunicipality = null
+                        pendingHydrantNavigate = hydrant
+                        currentDestination = AppDestinations.MAP
+                    },
+                    onDirections = { hydrant ->
+                        showHydrantMapScreen = false
+                        showHydrantListScreen = false
+                        selectedMunicipality = null
+                        pendingHydrantDirections = hydrant
+                        currentDestination = AppDestinations.MAP
+                    },
+                    adminType = adminType,
+                    adminMunicipality = municipalityName
+                )
+            }
+            showHydrantListScreen && selectedMunicipality != null -> {
+                BackHandler { showHydrantListScreen = false }
+                FireHydrantListScreen(
+                    municipalityName = selectedMunicipality!!,
+                    onBack = { showHydrantListScreen = false },
+                    onEditHydrant = { hydrant ->
+                        selectedHydrantForEdit = hydrant
+                    },
+                    onViewLocation = { hydrant ->
+                        selectedHydrantForView = hydrant
+                    },
+                    showInvalidCoordinatesOnly = showInvalidCoordinatesOnly,
+                    onClearInvalidFilter = { showInvalidCoordinatesOnly = false },
+                    initialFilter = hydrantListInitialFilter,
+                    adminType = adminType,
+                    adminMunicipality = municipalityName
+                )
+            }
+            showAddHydrantScreen && selectedMunicipality != null -> {
+                BackHandler { showAddHydrantScreen = false }
+                AddFireHydrantScreen(
+                    municipalityName = selectedMunicipality!!,
+                    onBack = { showAddHydrantScreen = false },
+                    onSuccess = { showAddHydrantScreen = false }
+                )
+            }
+            selectedMunicipality != null -> {
+                BackHandler { selectedMunicipality = null }
+                MunicipalityDetailScreen(
+                    municipalityName = selectedMunicipality!!,
+                    onBack = { selectedMunicipality = null },
+                    onAddHydrant = { showAddHydrantScreen = true },
+                    onShowHydrantList = { filter ->
+                        hydrantListInitialFilter = filter
+                        showHydrantListScreen = true
+                    },
+                    onShowHydrantMap = { showHydrantMapScreen = true },
+                    adminType = adminType,
+                    adminMunicipality = municipalityName,
+                    isCheckingAdmin = isCheckingAdmin
+                )
+            }
         }
-        selectedHydrantForView != null -> {
-            BackHandler { selectedHydrantForView = null }
-            ViewHydrantLocationScreen(
-                hydrant = selectedHydrantForView!!,
-                onBack = { selectedHydrantForView = null },
-                onNavigate = { hydrant ->
-                    selectedHydrantForView = null
-                    showHydrantListScreen = false
-                    showHydrantMapScreen = false
-                    showAddHydrantScreen = false
-                    selectedMunicipality = null
-                    pendingHydrantNavigate = hydrant
-                    currentDestination = AppDestinations.MAP
-                },
-                onDirections = { hydrant ->
-                    selectedHydrantForView = null
-                    showHydrantListScreen = false
-                    showHydrantMapScreen = false
-                    showAddHydrantScreen = false
-                    selectedMunicipality = null
-                    pendingHydrantDirections = hydrant
-                    currentDestination = AppDestinations.MAP
-                },
-                isAdmin = adminType.isNotEmpty()   // ← ADD THIS LINE
-            )
-        }
-        selectedHydrantForEdit != null && selectedMunicipality != null -> {
-            BackHandler { selectedHydrantForEdit = null }
-            EditFireHydrantScreen(
-                hydrant = selectedHydrantForEdit!!,
-                onBack = { selectedHydrantForEdit = null },
-                onSuccess = { selectedHydrantForEdit = null },
-                onDelete = { selectedHydrantForEdit = null }
-            )
-        }
-        showHydrantMapScreen && selectedMunicipality != null -> {
-            BackHandler { showHydrantMapScreen = false }
-            FireHydrantMapScreen(
-                municipalityName = selectedMunicipality!!,
-                onBack = { showHydrantMapScreen = false },
-                onShowInvalidCoordinates = {
-                    showInvalidCoordinatesOnly = true
-                    showHydrantMapScreen = false
-                    showHydrantListScreen = true
-                },
-                onNavigate = { hydrant ->
-                    showHydrantMapScreen = false
-                    showHydrantListScreen = false
-                    selectedMunicipality = null
-                    pendingHydrantNavigate = hydrant
-                    currentDestination = AppDestinations.MAP
-                },
-                onDirections = { hydrant ->
-                    showHydrantMapScreen = false
-                    showHydrantListScreen = false
-                    selectedMunicipality = null
-                    pendingHydrantDirections = hydrant
-                    currentDestination = AppDestinations.MAP
-                },
-                adminType = adminType,
-                adminMunicipality = municipalityName
-            )
-        }
-        showHydrantListScreen && selectedMunicipality != null -> {
-            BackHandler { showHydrantListScreen = false }
-            FireHydrantListScreen(
-                municipalityName = selectedMunicipality!!,
-                onBack = { showHydrantListScreen = false },
-                onEditHydrant = { hydrant ->
-                    selectedHydrantForEdit = hydrant
-                },
-                onViewLocation = { hydrant ->
-                    selectedHydrantForView = hydrant
-                },
-                showInvalidCoordinatesOnly = showInvalidCoordinatesOnly,
-                onClearInvalidFilter = { showInvalidCoordinatesOnly = false },
-                initialFilter = hydrantListInitialFilter
-            )
-        }
-        showAddHydrantScreen && selectedMunicipality != null -> {
-            BackHandler { showAddHydrantScreen = false }
-            AddFireHydrantScreen(
-                municipalityName = selectedMunicipality!!,
-                onBack = { showAddHydrantScreen = false },
-                onSuccess = { showAddHydrantScreen = false }
-            )
-        }
-        selectedMunicipality != null -> {
-            BackHandler { selectedMunicipality = null }
-            MunicipalityDetailScreen(
-                municipalityName = selectedMunicipality!!,
-                onBack = { selectedMunicipality = null },
-                onAddHydrant = { showAddHydrantScreen = true },
-                onShowHydrantList = { filter ->
-                    hydrantListInitialFilter = filter
-                    showHydrantListScreen = true
-                },
-                onShowHydrantMap = { showHydrantMapScreen = true }
-            )
-        }
-    }
-} // closes root Box
+    } // closes root Box
 }
 
 
@@ -2500,7 +2595,9 @@ fun FireHydrantListScreen(
     onViewLocation: (FireHydrant) -> Unit,
     showInvalidCoordinatesOnly: Boolean = false,
     onClearInvalidFilter: () -> Unit = {},
-    initialFilter: String = "All"
+    initialFilter: String = "All",
+    adminType: String = "",
+    adminMunicipality: String = ""
 ) {
     val hydrantViewModel: FireHydrantViewModel = viewModel()
     val hydrantUiState by hydrantViewModel.uiState.collectAsState()
@@ -2525,56 +2622,9 @@ fun FireHydrantListScreen(
     var selectedFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var isSearchActive by rememberSaveable { mutableStateOf(false) }
 
-    // ✅ UPDATED: Check if user is admin AND has access to this municipality
-    val auth = FirebaseAuth.getInstance()
-    val userEmail = auth.currentUser?.email ?: ""
-    val firestore = Firebase.firestore
-    var isAdmin by remember { mutableStateOf(false) }
-    var hasAccessToMunicipality by remember { mutableStateOf(false) }
-    var isCheckingAdmin by remember { mutableStateOf(true) }
-
-    // ✅ UPDATED: Check admin status AND municipality access
-    LaunchedEffect(userEmail, municipalityName) {
-        if (userEmail.isNotEmpty()) {
-            firestore.collection("admins")
-                .document("chief_admin")
-                .collection("all")
-                .document(userEmail.lowercase())
-                .get()
-                .addOnSuccessListener { chiefDoc ->
-                    if (chiefDoc.exists()) {
-                        isAdmin = true
-                        hasAccessToMunicipality = true
-                        isCheckingAdmin = false
-                    } else {
-                        firestore.collection("admins")
-                            .document("municipality_admin")
-                            .collection(municipalityName)
-                            .document(userEmail.lowercase())
-                            .get()
-                            .addOnSuccessListener { munDoc ->
-                                isAdmin = munDoc.exists()
-                                hasAccessToMunicipality = munDoc.exists()
-                                isCheckingAdmin = false
-                            }
-                            .addOnFailureListener {
-                                isAdmin = false
-                                hasAccessToMunicipality = false
-                                isCheckingAdmin = false
-                            }
-                    }
-                }
-                .addOnFailureListener {
-                    isAdmin = false
-                    hasAccessToMunicipality = false
-                    isCheckingAdmin = false
-                }
-        } else {
-            isAdmin = false
-            hasAccessToMunicipality = false
-            isCheckingAdmin = false
-        }
-    }
+    val isAdmin = adminType == "CHIEF_ADMINISTRATOR" ||
+            (adminType == "MUNICIPALITY_ADMIN" && adminMunicipality == municipalityName)
+    val hasAccessToMunicipality = isAdmin
 
     LaunchedEffect(municipalityName) {
         hydrantViewModel.loadHydrants(municipalityName)
@@ -3010,9 +3060,8 @@ fun FireHydrantListScreen(
                             hydrant = hydrant,
                             onEditClick = { onEditHydrant(hydrant) },
                             onViewLocationClick = { onViewLocation(hydrant) },
-                            showInvalidWarning = hasInvalidCoordinates(hydrant),
-                            isAdmin = hasAccessToMunicipality,
-                            isCheckingAdmin = isCheckingAdmin
+                            showInvalidWarning = hasInvalidCoordinates(hydrant),isAdmin = hasAccessToMunicipality,
+                            isCheckingAdmin = false
                         )
                     }
 
@@ -4654,6 +4703,16 @@ private fun createEmojiMarkerIcon(
     return com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmap)
 }
 
+// Cache admin status so it never re-checks after first load
+private object AdminStatusCache {
+    var isAdmin: Boolean = false
+    var isChiefAdmin: Boolean = false
+    var hasAccessToMunicipality: Boolean = false
+    var isResolved: Boolean = false
+    var cachedEmail: String = ""
+    var cachedMunicipality: String = ""
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MunicipalityDetailScreen(
@@ -4661,7 +4720,10 @@ fun MunicipalityDetailScreen(
     onBack: () -> Unit,
     onAddHydrant: () -> Unit,
     onShowHydrantList: (String) -> Unit,
-    onShowHydrantMap: () -> Unit
+    onShowHydrantMap: () -> Unit,
+    adminType: String = "",
+    adminMunicipality: String = "",
+    isCheckingAdmin: Boolean = false
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val auth = FirebaseAuth.getInstance()
@@ -4676,10 +4738,10 @@ fun MunicipalityDetailScreen(
     var redMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
     var orangeMarkerIcon by remember { mutableStateOf<com.google.android.gms.maps.model.BitmapDescriptor?>(null) }
 
-    var isAdmin by remember { mutableStateOf(false) }
-    var hasAccessToMunicipality by remember { mutableStateOf(false) }
-    var isChiefAdmin by remember { mutableStateOf(false) }
-    var isCheckingAdmin by remember { mutableStateOf(true) }
+    val isChiefAdmin = adminType == "CHIEF_ADMINISTRATOR"
+    val isAdmin = adminType.isNotEmpty()
+    val hasAccessToMunicipality = isChiefAdmin ||
+            (adminType == "MUNICIPALITY_ADMIN" && adminMunicipality == municipalityName)
 
     // Dialog states
     var showSuccessDialog by remember { mutableStateOf(false) }
@@ -4739,53 +4801,6 @@ fun MunicipalityDetailScreen(
         hydrantUiState.hydrants.count { it.serviceStatus == "In Service" || it.serviceStatus == "Occupied" }
     }
     val totalHydrants = remember(outOfService, inService) { outOfService + inService }
-
-    LaunchedEffect(userEmail, municipalityName) {
-        if (userEmail.isNotEmpty()) {
-            firestore.collection("admins")
-                .document("chief_admin")
-                .collection("all")
-                .document(userEmail.lowercase())
-                .get()
-                .addOnSuccessListener { chiefDoc ->
-                    if (chiefDoc.exists()) {
-                        isAdmin = true
-                        isChiefAdmin = true
-                        hasAccessToMunicipality = true
-                        isCheckingAdmin = false
-                    } else {
-                        firestore.collection("admins")
-                            .document("municipality_admin")
-                            .collection(municipalityName)
-                            .document(userEmail.lowercase())
-                            .get()
-                            .addOnSuccessListener { munDoc ->
-                                isAdmin = munDoc.exists()
-                                isChiefAdmin = false
-                                hasAccessToMunicipality = munDoc.exists()
-                                isCheckingAdmin = false
-                            }
-                            .addOnFailureListener {
-                                isAdmin = false
-                                isChiefAdmin = false
-                                hasAccessToMunicipality = false
-                                isCheckingAdmin = false
-                            }
-                    }
-                }
-                .addOnFailureListener {
-                    isAdmin = false
-                    isChiefAdmin = false
-                    hasAccessToMunicipality = false
-                    isCheckingAdmin = false
-                }
-        } else {
-            isAdmin = false
-            isChiefAdmin = false
-            hasAccessToMunicipality = false
-            isCheckingAdmin = false
-        }
-    }
 
 
     // ========== PDF FUNCTIONS ==========
@@ -5551,7 +5566,9 @@ fun MunicipalityDetailScreen(
                                     .padding(end = 12.dp)
                                     .height(40.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF4CAF50)
+                                    containerColor = Color(0xFF4CAF50),
+                                    disabledContainerColor = Color(0xFF4CAF50),
+                                    disabledContentColor = Color.White
                                 ),
                                 shape = RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
@@ -5822,7 +5839,9 @@ fun MunicipalityDetailScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Card(
-                            modifier = Modifier.weight(1f).clickable { onShowHydrantList("Out of Service") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onShowHydrantList("Out of Service") },
                             colors = CardDefaults.cardColors(containerColor = Color(0xFFFFCDD2)),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
@@ -5848,7 +5867,9 @@ fun MunicipalityDetailScreen(
                         }
 
                         Card(
-                            modifier = Modifier.weight(1f).clickable { onShowHydrantList("In Service") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onShowHydrantList("In Service") },
                             colors = CardDefaults.cardColors(containerColor = Color(0xFFC8E6C9)),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
@@ -6616,35 +6637,35 @@ fun FireHydrantMapScreen(
                             // Occupy / Release button row
                             if (isCardAdmin && (hydrant.serviceStatus == "In Service" || hydrant.serviceStatus == "Occupied")) {
                                 Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp)
-                            ) {
-                                val isOccupied = hydrant.serviceStatus == "Occupied"
-                                OutlinedButton(
-                                    onClick = {
-                                        occupyTargetHydrant = hydrant
-                                        showOccupyConfirmDialog = true
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.outlinedButtonColors(
-                                        contentColor = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
-                                    ),
-                                    border = BorderStroke(1.dp, if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)),
-                                    shape = RoundedCornerShape(8.dp)
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 4.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Warning,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isOccupied) "Release Hydrant" else "Occupy Hydrant",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
+                                    val isOccupied = hydrant.serviceStatus == "Occupied"
+                                    OutlinedButton(
+                                        onClick = {
+                                            occupyTargetHydrant = hydrant
+                                            showOccupyConfirmDialog = true
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            contentColor = if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)
+                                        ),
+                                        border = BorderStroke(1.dp, if (isOccupied) Color(0xFF757575) else Color(0xFFFF9800)),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isOccupied) "Release Hydrant" else "Occupy Hydrant",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
                                 }
                             } // closes if
                         }
@@ -7488,7 +7509,9 @@ fun MapScreen(
     initialHydrantForDirections: FireHydrant? = null,
     onHydrantDirectionsHandled: () -> Unit = {},
     adminType: String = "",
-    adminMunicipality: String = ""
+    adminMunicipality: String = "",
+    externalUserLocation: LatLng? = null,
+    isExternalLocationEnabled: Boolean = false
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val lagunaLake = LatLng(14.3500, 121.2500)
@@ -7504,20 +7527,27 @@ fun MapScreen(
     var nearestHydrant by remember { mutableStateOf<FireHydrant?>(null) }
     var nearestHydrantDistance by remember { mutableStateOf<Double?>(null) }
     var nearestHydrants by remember { mutableStateOf<List<Pair<FireHydrant, Double>>>(emptyList()) }
+    var savedNearestHydrant by remember { mutableStateOf<FireHydrant?>(null) }
+    var savedNearestHydrantDistance by remember { mutableStateOf<Double?>(null) }
     var showNearestDropdown by remember { mutableStateOf(false) }
     var showEmergencyDialog by remember { mutableStateOf(false) }
     var showReportFireDialog by remember { mutableStateOf(false) }
     var isNavigating by remember { mutableStateOf(false) }
+    var directionsFromPinpointCard by remember { mutableStateOf(false) }
+    var navigateFromPinpointCard by remember { mutableStateOf(false) }
+    var navigateFromDirectionsCard by remember { mutableStateOf(false) }
     var currentStepIndex by remember { mutableStateOf(0) }
     var navigationHydrant by remember { mutableStateOf<FireHydrant?>(null) }
     val scope = rememberCoroutineScope()
     var triggerGoToMyLocation by remember { mutableStateOf(false) }
+    var isOverviewMode by remember { mutableStateOf(false) }
     var triggerFindNearestHydrant by remember { mutableStateOf(false) }
     var triggerNavigate by remember { mutableStateOf(false) }
     var triggerDirections by remember { mutableStateOf(false) }
     var pendingLocationAction by remember { mutableStateOf("") }
     var hydrantDirectionsFetched by remember { mutableStateOf(false) }
     var fireDirectionsFetched by remember { mutableStateOf(false) }
+    var navigateFromFireCard by remember { mutableStateOf(false) }
     var tts by remember { mutableStateOf<android.speech.tts.TextToSpeech?>(null) }
     var lastSpokenStepIndex by remember { mutableStateOf(-1) }
     var hasSpoken300m by remember { mutableStateOf(false) }
@@ -7552,7 +7582,19 @@ fun MapScreen(
         }
     }
     var userCurrentLocation by remember { mutableStateOf<LatLng?>(null) }
+
+    // Sync with global GPS state from MainApp
+    LaunchedEffect(isExternalLocationEnabled, externalUserLocation) {
+        if (isExternalLocationEnabled && externalUserLocation != null) {
+            isMyLocationEnabled = true
+            userCurrentLocation = externalUserLocation
+        } else if (!isExternalLocationEnabled) {
+            isMyLocationEnabled = false
+            userCurrentLocation = null
+        }
+    }
     var userCurrentBearing by remember { mutableStateOf(0f) }
+    var userCurrentSpeed by remember { mutableStateOf(0f) }
     var isLoadingDirections by remember { mutableStateOf(false) }
 
     // Firefighter location tracking states
@@ -7630,11 +7672,126 @@ fun MapScreen(
         else -> false
     }
 
-    BackHandler(enabled = isDrawerOpen || isSearchOpen || selectedHydrantMarker != null || isCardVisible) {
+    BackHandler(enabled = isDrawerOpen || isSearchOpen || selectedHydrantMarker != null || isCardVisible || isNavigating || directionsResult != null || showIncidentInfoCard) {
         when {
+            showIncidentInfoCard -> {
+                showIncidentInfoCard = false
+                showIncidentMarker = false
+                incidentMarkerLocation = null
+                nearestHydrant = null
+                directionsResult = null
+                hydrantDirectionsFetched = false
+                fireDirectionsFetched = false
+                navigateFromFireCard = false
+                showFirefighterLocations = false
+            }
+            isNavigating -> {
+                val pinpointHydrant = navigationHydrant
+                isNavigating = false
+                isOverviewMode = false  // ← ADD THIS
+                currentStepIndex = 0
+                tts?.stop()
+                if (navigateFromDirectionsCard) {
+                    // came from directions card → go back to directions card, keep directionsResult
+                    navigateFromDirectionsCard = false
+                    showIncidentInfoCard = true
+                    if (navigateFromFireCard) {
+                        navigateFromFireCard = false
+                        fireDirectionsFetched = true
+                        hydrantDirectionsFetched = false
+                    } else {
+                        hydrantDirectionsFetched = true
+                    }
+                    scope.launch {
+                        val user = userCurrentLocation
+                        val routePoints = directionsResult?.polylinePoints
+                        if (user != null && !routePoints.isNullOrEmpty()) {
+                            val boundsBuilder = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                            boundsBuilder.include(user)
+                            routePoints.forEach { boundsBuilder.include(it) }
+                            cameraPositionState.animate(
+                                CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 120),
+                                durationMs = 800
+                            )
+                        } else {
+                            cameraPositionState.animate(
+                                CameraUpdateFactory.newCameraPosition(
+                                    CameraPosition.Builder()
+                                        .target(cameraPositionState.position.target)
+                                        .zoom(15f)
+                                        .tilt(0f)
+                                        .bearing(0f)
+                                        .build()
+                                ),
+                                durationMs = 600
+                            )
+                        }
+                    }
+                } else {
+                    directionsResult = null
+                    hydrantDirectionsFetched = false
+                    fireDirectionsFetched = false
+                    navigateFromFireCard = false
+                    userCurrentLocation = null
+                    scope.launch {
+                        cameraPositionState.animate(
+                            CameraUpdateFactory.newCameraPosition(
+                                CameraPosition.Builder()
+                                    .target(cameraPositionState.position.target)
+                                    .zoom(15f)
+                                    .tilt(0f)
+                                    .bearing(0f)
+                                    .build()
+                            ),
+                            durationMs = 600
+                        )
+                    }
+                }
+                if (navigateFromPinpointCard) {
+                    navigateFromPinpointCard = false
+                    nearestHydrant = null
+                    nearestHydrantDistance = null
+                    selectedHydrantForCard = pinpointHydrant
+                    showHydrantDetailsCard = false
+                    isCardVisible = false
+                    showHydrantDetailsCard = true
+                    isCardVisible = true
+                }
+            }
+            directionsResult != null -> {
+                directionsResult = null
+                navigationHydrant = null
+                hydrantDirectionsFetched = false
+                fireDirectionsFetched = false
+                userCurrentLocation = null
+                if (navigateFromPinpointCard) {
+                    // Came here from pinpoint card via Navigate button → restore pinpoint card
+                    navigateFromPinpointCard = false
+                    val savedHydrant = selectedHydrantForCard
+                    nearestHydrant = null
+                    nearestHydrantDistance = null
+                    selectedHydrantForCard = savedHydrant
+                    showHydrantDetailsCard = true
+                    isCardVisible = true
+                } else if (directionsFromPinpointCard) {
+                    directionsFromPinpointCard = false
+                    nearestHydrant = null
+                    nearestHydrantDistance = null
+                    // Restore the pinpoint card
+                    showHydrantDetailsCard = true
+                    isCardVisible = true
+                }
+            }
             isCardVisible -> {
                 isCardVisible = false
                 showHydrantDetailsCard = false
+                // Restore nearest hydrant if it was saved
+                if (savedNearestHydrant != null) {
+                    nearestHydrant = savedNearestHydrant
+                    nearestHydrantDistance = savedNearestHydrantDistance
+                    savedNearestHydrant = null
+                    savedNearestHydrantDistance = null
+                }
             }
             selectedHydrantMarker != null -> {
                 selectedHydrantMarker = null
@@ -7661,7 +7818,10 @@ fun MapScreen(
             when (pendingLocationAction) {
                 "goToLocation" -> triggerGoToMyLocation = true
                 "findNearest" -> triggerFindNearestHydrant = true
-                "navigate" -> triggerNavigate = true
+                "navigate" -> {
+                    navigateFromPinpointCard = true
+                    triggerNavigate = true
+                }
                 "directions" -> triggerDirections = true
             }
             pendingLocationAction = ""
@@ -7830,13 +7990,15 @@ fun MapScreen(
                                 if (directionsResult != null) {
                                     navigationHydrant = selectedHydrantForCard
                                     nearestHydrant = selectedHydrantForCard
+                                    val savedPinpointHydrant = selectedHydrantForCard
                                     currentStepIndex = 0
                                     isNavigating = true
                                     lastSpokenStepIndex = -1
                                     hasSpoken300m = false
                                     hasSpokenNow = false
                                     showHydrantDetailsCard = false
-                                    selectedHydrantForCard = null
+                                    isCardVisible = false
+                                    selectedHydrantForCard = savedPinpointHydrant
                                     // Calculate bearing from user to first waypoint for navigation tilt
                                     val bearing = run {
                                         val firstStep = directionsResult?.steps?.firstOrNull()
@@ -7902,6 +8064,7 @@ fun MapScreen(
                                 )
                                 isLoadingDirections = false
                                 if (selectedHydrantForCard != null) {
+                                    directionsFromPinpointCard = true   // ← ADD THIS LINE
                                     nearestHydrant = selectedHydrantForCard
                                     showHydrantDetailsCard = false
                                     isCardVisible = false
@@ -8255,9 +8418,45 @@ fun MapScreen(
             incidentMarkerLocation = incidentLatLng
             showIncidentMarker = true
             showIncidentInfoCard = true
+            // Close pinpoint card if open
+            showHydrantDetailsCard = false
+            isCardVisible = false
+            selectedHydrantForCard = null
+            selectedHydrantMarker = null
+            if (checkLocationPermission(context)) {
+                isMyLocationEnabled = true
+                getCurrentLocation(context) { location ->
+                    userCurrentLocation = LatLng(location.latitude, location.longitude)
+                }
+            }
             scope.launch {
                 kotlinx.coroutines.delay(500)
-                cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(incidentLatLng, 16f), durationMs = 1000)
+                cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(incidentLatLng, 16f), durationMs = 800)
+                // Retry up to 10 times (5 seconds total) waiting for nearestHydrant to be calculated
+                var hydrantLat: Double? = null
+                var hydrantLng: Double? = null
+                repeat(10) {
+                    if (hydrantLat == null) {
+                        kotlinx.coroutines.delay(500)
+                        hydrantLat = nearestHydrant?.latitude?.toDoubleOrNull()
+                        hydrantLng = nearestHydrant?.longitude?.toDoubleOrNull()
+                    }
+                }
+                if (hydrantLat != null && hydrantLng != null) {
+                    val boundsBuilder = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                    boundsBuilder.include(incidentLatLng)
+                    boundsBuilder.include(LatLng(hydrantLat!!, hydrantLng!!))
+                    cameraPositionState.animate(
+                        CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 160),
+                        durationMs = 1000
+                    )
+                    cameraPositionState.animate(CameraUpdateFactory.scrollBy(0f, -300f), durationMs = 300)
+                } else {
+                    cameraPositionState.animate(
+                        CameraUpdateFactory.newLatLngZoom(incidentLatLng, 15f),
+                        durationMs = 800
+                    )
+                }
             }
             onIncidentHandled()
         }
@@ -8279,6 +8478,7 @@ fun MapScreen(
                 }
                 // Trigger navigate
                 kotlinx.coroutines.delay(500)
+                navigateFromPinpointCard = true
                 triggerNavigate = true
             }
             onHydrantNavigateHandled()
@@ -8362,18 +8562,20 @@ fun MapScreen(
                 hasSpokenNow = false
                 lastSpokenStepIndex = nextIndex
 
-                scope.launch {
-                    cameraPositionState.animate(
-                        CameraUpdateFactory.newCameraPosition(
-                            CameraPosition.Builder()
-                                .target(userCurrentLocation!!)
-                                .zoom(18f)
-                                .tilt(60f)
-                                .bearing(userCurrentBearing)   // ← real GPS bearing
-                                .build()
-                        ),
-                        durationMs = 300
-                    )
+                if (!isOverviewMode) {
+                    scope.launch {
+                        cameraPositionState.animate(
+                            CameraUpdateFactory.newCameraPosition(
+                                CameraPosition.Builder()
+                                    .target(userCurrentLocation!!)
+                                    .zoom(18f)
+                                    .tilt(60f)
+                                    .bearing(userCurrentBearing)
+                                    .build()
+                            ),
+                            durationMs = 300
+                        )
+                    }
                 }
             }
         } else {
@@ -8392,6 +8594,7 @@ fun MapScreen(
             if (distanceToNext < 20.0 && tts != null) {
                 tts?.speak("You have arrived at your destination", android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "arrived")
                 isNavigating = false
+                isOverviewMode = false  // ← ADD THIS
             }
         }
     }
@@ -8418,6 +8621,7 @@ fun MapScreen(
                     if (loc.hasBearing() && loc.speed > 0.5f) {
                         userCurrentBearing = loc.bearing
                     }
+                    userCurrentSpeed = if (loc.speed > 0.5f) loc.speed * 3.6f else -1f
                 }
             }
         }
@@ -8433,7 +8637,7 @@ fun MapScreen(
 
     // Smooth camera follow — fires on every GPS update during navigation
     LaunchedEffect(userCurrentLocation, userCurrentBearing) {
-        if (!isNavigating || userCurrentLocation == null) return@LaunchedEffect
+        if (!isNavigating || userCurrentLocation == null || isOverviewMode) return@LaunchedEffect
         cameraPositionState.animate(
             CameraUpdateFactory.newCameraPosition(
                 CameraPosition.Builder()
@@ -8580,6 +8784,13 @@ fun MapScreen(
                     val result = fetchDirections(origin = incidentMarkerLocation!!, destination = LatLng(hydrantLat, hydrantLng))
                     directionsResult = result
                     isLoadingDirections = false
+                    val boundsBuilder = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                    boundsBuilder.include(incidentMarkerLocation!!)
+                    boundsBuilder.include(LatLng(hydrantLat, hydrantLng))
+                    cameraPositionState.animate(
+                        CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 160),
+                        durationMs = 1000
+                    )
                 }
             }
         }
@@ -8627,6 +8838,7 @@ fun MapScreen(
                         cachedSettingsClient.checkLocationSettings(cachedLocationSettingsRequest)
                             .addOnSuccessListener {
                                 locationSettingsOk = true
+                                navigateFromPinpointCard = true
                                 triggerNavigate = true
                             }
                             .addOnFailureListener { exception ->
@@ -8731,7 +8943,9 @@ fun MapScreen(
 
                     // Report a Fire Incident - NOW FIRST
                     Surface(onClick = { showEmergencyDialog = false; showReportFireDialog = true }, modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Row(Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                             Column {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Image(
@@ -8752,7 +8966,9 @@ fun MapScreen(
 
                     // Emergency Hotline 911
                     Surface(onClick = { val intent = android.content.Intent(android.content.Intent.ACTION_DIAL); intent.data = android.net.Uri.parse("tel:911"); context.startActivity(intent) }, modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFF3E0), shape = RoundedCornerShape(8.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Row(Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                             Column { Text("Emergency Hotline", fontWeight = FontWeight.Bold); Text("911", style = MaterialTheme.typography.titleLarge, color = Color(0xFFE65100), fontWeight = FontWeight.Bold) }
                             Icon(Icons.Default.KeyboardArrowRight, "Call", tint = Color(0xFFE65100), modifier = Modifier.size(32.dp))
                         }
@@ -8761,7 +8977,9 @@ fun MapScreen(
 
                     // Bureau of Fire Protection 160
                     Surface(onClick = { val intent = android.content.Intent(android.content.Intent.ACTION_DIAL); intent.data = android.net.Uri.parse("tel:160"); context.startActivity(intent) }, modifier = Modifier.fillMaxWidth(), color = Color(0xFFE3F2FD), shape = RoundedCornerShape(8.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Row(Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                             Column { Text("Bureau of Fire Protection", fontWeight = FontWeight.Bold); Text("160", style = MaterialTheme.typography.titleLarge, color = Color(0xFF1565C0), fontWeight = FontWeight.Bold) }
                             Icon(Icons.Default.KeyboardArrowRight, "Call", tint = Color(0xFF1565C0), modifier = Modifier.size(32.dp))
                         }
@@ -8993,7 +9211,9 @@ fun MapScreen(
 
                     if (isGettingLocation) {
                         Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFFE3F2FD), shape = RoundedCornerShape(8.dp)) {
-                            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(20.dp), color = Color(0xFF1976D2), strokeWidth = 2.dp)
                                 Spacer(Modifier.width(8.dp))
                                 Text("Getting your location...", style = MaterialTheme.typography.bodySmall, color = Color(0xFF1976D2))
@@ -9003,7 +9223,9 @@ fun MapScreen(
 
                     if (currentLocation.isNotEmpty()) {
                         Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFFE8F5E9), shape = RoundedCornerShape(8.dp)) {
-                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                            Column(Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("📍", fontSize = 20.sp)
                                     Spacer(Modifier.width(8.dp))
@@ -9029,7 +9251,9 @@ fun MapScreen(
                     } else if (locationDenied) {
                         // Show this when user pressed "No thanks" on the location dialog
                         Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
-                            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("🚫", fontSize = 16.sp)
                                 Spacer(Modifier.width(8.dp))
                                 Column {
@@ -9040,7 +9264,9 @@ fun MapScreen(
                         }
                     } else if (locationError) {
                         Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
-                            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("⚠️", fontSize = 16.sp)
                                 Spacer(Modifier.width(8.dp))
                                 Text("Please get your current location before submitting", style = MaterialTheme.typography.bodySmall, color = Color(0xFFD32F2F))
@@ -9389,7 +9615,9 @@ fun MapScreen(
                                 isCardVisible = false
                             } else if (isNearestOrSearchHydrantShowing) {
                                 // If clicking a DIFFERENT hydrant while a card is showing:
-                                // 1. Close the nearest/search hydrant card
+                                // 1. Save and close the nearest/search hydrant card
+                                savedNearestHydrant = nearestHydrant
+                                savedNearestHydrantDistance = nearestHydrantDistance
                                 nearestHydrant = null
                                 selectedSearchHydrant = null
                                 directionsResult = null
@@ -9444,7 +9672,7 @@ fun MapScreen(
 
             // Directions polyline — recalculates live with user position
             directionsResult?.let { result ->
-                val userLoc = userCurrentLocation
+                val userLoc = if (showIncidentInfoCard) null else userCurrentLocation
 
                 // Find closest point on entire route to user
                 var closestIndex = 0
@@ -9538,7 +9766,9 @@ fun MapScreen(
                     .fillMaxSize()
                     .background(Color.White)
             ) {
-                Column(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()) {
                     // Search Header
                     Row(
                         modifier = Modifier
@@ -9700,7 +9930,9 @@ fun MapScreen(
                                                     Image(
                                                         painter = painterResource(id = R.drawable.laguna_logo),
                                                         contentDescription = "Laguna logo",
-                                                        modifier = Modifier.size(28.dp).clip(CircleShape),
+                                                        modifier = Modifier
+                                                            .size(28.dp)
+                                                            .clip(CircleShape),
                                                         contentScale = ContentScale.Crop
                                                     )
                                                     Spacer(Modifier.width(12.dp))
@@ -9725,7 +9957,9 @@ fun MapScreen(
                                                     Image(
                                                         painter = painterResource(id = getMunicipalityLogo(municipality)),
                                                         contentDescription = "$municipality logo",
-                                                        modifier = Modifier.size(28.dp).clip(CircleShape),
+                                                        modifier = Modifier
+                                                            .size(28.dp)
+                                                            .clip(CircleShape),
                                                         contentScale = ContentScale.Crop
                                                     )
                                                     Spacer(Modifier.width(12.dp))
@@ -10026,6 +10260,7 @@ fun MapScreen(
             Card(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
+                    .statusBarsPadding()
                     .padding(top = 8.dp, start = 16.dp, end = 16.dp)
                     .fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
@@ -10070,18 +10305,9 @@ fun MapScreen(
                         }
                     }
 
-                    Spacer(Modifier.height(8.dp))
-
-                    // Coordinates
-                    Text(
-                        "Lat: ${String.format("%.6f", incidentMarkerLocation!!.latitude)}, Lng: ${String.format("%.6f", incidentMarkerLocation!!.longitude)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF666666)
-                    )
-
                     // Nearest Hydrant Info
                     if (nearestHydrant != null) {
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(4.dp))
                         Surface(
                             color = Color(0xFFE8F5E9),
                             shape = RoundedCornerShape(8.dp)
@@ -10154,6 +10380,7 @@ fun MapScreen(
                                             hasSpoken300m = false
                                             hasSpokenNow = false
                                             showIncidentInfoCard = false
+                                            navigateFromDirectionsCard = true
                                             scope.launch {
                                                 userCurrentLocation?.let { loc ->
                                                     val bearing9 = run {
@@ -10194,6 +10421,7 @@ fun MapScreen(
                                                     if (locationSettingsOk) {
                                                         getCurrentLocation(context) { location ->
                                                             userCurrentLocation = LatLng(location.latitude, location.longitude)
+                                                            isMyLocationEnabled = true
                                                             isLoadingDirections = true
                                                             scope.launch {
                                                                 directionsResult = fetchDirections(
@@ -10225,6 +10453,7 @@ fun MapScreen(
                                                                 locationSettingsOk = true
                                                                 getCurrentLocation(context) { location ->
                                                                     userCurrentLocation = LatLng(location.latitude, location.longitude)
+                                                                    isMyLocationEnabled = true
                                                                     isLoadingDirections = true
                                                                     scope.launch {
                                                                         directionsResult = fetchDirections(
@@ -10235,10 +10464,14 @@ fun MapScreen(
                                                                         if (directionsResult != null) {
                                                                             hydrantDirectionsFetched = true
                                                                             fireDirectionsFetched = false
+                                                                            val routePoints2 = directionsResult?.polylinePoints
+                                                                            val boundsBuilder2 = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                                                                            if (!routePoints2.isNullOrEmpty()) routePoints2.forEach { boundsBuilder2.include(it) }
+                                                                            boundsBuilder2.include(LatLng(hydrantLat, hydrantLng))
+                                                                            userCurrentLocation?.let { boundsBuilder2.include(it) }
                                                                             cameraPositionState.animate(
-                                                                                CameraUpdateFactory.newLatLngZoom(
-                                                                                    LatLng(hydrantLat, hydrantLng), 15f
-                                                                                )
+                                                                                CameraUpdateFactory.newLatLngBounds(boundsBuilder2.build(), 120),
+                                                                                durationMs = 900
                                                                             )
                                                                         } else {
                                                                             android.widget.Toast.makeText(context, "Could not fetch directions", android.widget.Toast.LENGTH_SHORT).show()
@@ -10326,6 +10559,8 @@ fun MapScreen(
                                         hasSpoken300m = false
                                         hasSpokenNow = false
                                         showIncidentInfoCard = false
+                                        navigateFromDirectionsCard = true
+                                        navigateFromFireCard = true
                                         scope.launch {
                                             userCurrentLocation?.let { loc ->
                                                 val bearing10 = run {
@@ -10350,6 +10585,7 @@ fun MapScreen(
                                             if (locationSettingsOk) {
                                                 getCurrentLocation(context) { location ->
                                                     userCurrentLocation = LatLng(location.latitude, location.longitude)
+                                                    isMyLocationEnabled = true
                                                     isLoadingDirections = true
                                                     scope.launch {
                                                         directionsResult = fetchDirections(
@@ -10360,8 +10596,14 @@ fun MapScreen(
                                                         if (directionsResult != null) {
                                                             fireDirectionsFetched = true
                                                             hydrantDirectionsFetched = false
+                                                            val routePoints3 = directionsResult?.polylinePoints
+                                                            val boundsBuilder3 = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                                                            if (!routePoints3.isNullOrEmpty()) routePoints3.forEach { boundsBuilder3.include(it) }
+                                                            boundsBuilder3.include(incidentMarkerLocation!!)
+                                                            userCurrentLocation?.let { boundsBuilder3.include(it) }
                                                             cameraPositionState.animate(
-                                                                CameraUpdateFactory.newLatLngZoom(incidentMarkerLocation!!, 15f)
+                                                                CameraUpdateFactory.newLatLngBounds(boundsBuilder3.build(), 120),
+                                                                durationMs = 900
                                                             )
                                                         } else {
                                                             android.widget.Toast.makeText(context, "Could not fetch directions", android.widget.Toast.LENGTH_SHORT).show()
@@ -10374,6 +10616,7 @@ fun MapScreen(
                                                         locationSettingsOk = true
                                                         getCurrentLocation(context) { location ->
                                                             userCurrentLocation = LatLng(location.latitude, location.longitude)
+                                                            isMyLocationEnabled = true
                                                             isLoadingDirections = true
                                                             scope.launch {
                                                                 directionsResult = fetchDirections(
@@ -10579,6 +10822,13 @@ fun MapScreen(
                                     kotlinx.coroutines.delay(320)
                                     selectedHydrantForCard = null
                                 }
+                                // Restore nearest hydrant if it was saved
+                                if (savedNearestHydrant != null) {
+                                    nearestHydrant = savedNearestHydrant
+                                    nearestHydrantDistance = savedNearestHydrantDistance
+                                    savedNearestHydrant = null
+                                    savedNearestHydrantDistance = null
+                                }
                             },
                             modifier = Modifier.size(32.dp)
                         ) {
@@ -10633,6 +10883,7 @@ fun MapScreen(
                                     cachedSettingsClient.checkLocationSettings(cachedLocationSettingsRequest)
                                         .addOnSuccessListener {
                                             locationSettingsOk = true
+                                            navigateFromPinpointCard = true
                                             triggerNavigate = true
                                         }
                                         .addOnFailureListener { exception ->
@@ -10645,9 +10896,11 @@ fun MapScreen(
                                                         ).build()
                                                     )
                                                 } catch (e: android.content.IntentSender.SendIntentException) {
+                                                    navigateFromPinpointCard = true
                                                     triggerNavigate = true
                                                 }
                                             } else {
+                                                navigateFromPinpointCard = true
                                                 triggerNavigate = true
                                             }
                                         }
@@ -10693,6 +10946,7 @@ fun MapScreen(
                                     cachedSettingsClient.checkLocationSettings(cachedLocationSettingsRequest)
                                         .addOnSuccessListener {
                                             locationSettingsOk = true
+                                            directionsFromPinpointCard = true
                                             triggerDirections = true
                                         }
                                         .addOnFailureListener { exception ->
@@ -10705,9 +10959,11 @@ fun MapScreen(
                                                         ).build()
                                                     )
                                                 } catch (e: android.content.IntentSender.SendIntentException) {
+                                                    directionsFromPinpointCard = true
                                                     triggerDirections = true
                                                 }
                                             } else {
+                                                directionsFromPinpointCard = true
                                                 triggerDirections = true
                                             }
                                         }
@@ -10803,7 +11059,8 @@ fun MapScreen(
                 onClick = { isDrawerOpen = true },
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 12.dp, top = 12.dp)
+                    .statusBarsPadding()
+                    .padding(start = 8.dp, top = 8.dp)
                     .size(40.dp),
                 containerColor = Color.White,
                 contentColor = Color(0xFF5F6368),
@@ -10825,7 +11082,8 @@ fun MapScreen(
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(end = 12.dp, top = 12.dp),
+                    .statusBarsPadding()
+                    .padding(end = 8.dp, top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // Emergency Button (Left) - with text
@@ -10956,29 +11214,29 @@ fun MapScreen(
                                     locationSettingsOk = true
                                     triggerGoToMyLocation = true
                                 }
-                                    .addOnFailureListener { exception ->
-                                        if (exception is com.google.android.gms.common.api.ResolvableApiException) {
-                                            try {
-                                                pendingLocationAction = "goToLocation"
-                                                mapLocationSettingsLauncher.launch(
-                                                    androidx.activity.result.IntentSenderRequest
-                                                        .Builder(exception.resolution.intentSender).build()
-                                                )
-                                            } catch (sendEx: android.content.IntentSender.SendIntentException) {
-                                                android.widget.Toast.makeText(
-                                                    context,
-                                                    "Unable to get current location",
-                                                    android.widget.Toast.LENGTH_LONG
-                                                ).show()
-                                            }
-                                        } else {
+                                .addOnFailureListener { exception ->
+                                    if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                        try {
+                                            pendingLocationAction = "goToLocation"
+                                            mapLocationSettingsLauncher.launch(
+                                                androidx.activity.result.IntentSenderRequest
+                                                    .Builder(exception.resolution.intentSender).build()
+                                            )
+                                        } catch (sendEx: android.content.IntentSender.SendIntentException) {
                                             android.widget.Toast.makeText(
                                                 context,
                                                 "Unable to get current location",
                                                 android.widget.Toast.LENGTH_LONG
                                             ).show()
                                         }
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Unable to get current location",
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
                                     }
+                                }
                         } else {
                             locationPermissionLauncher.launch(
                                 arrayOf(
@@ -11047,7 +11305,7 @@ fun MapScreen(
             }
         }
 
-        if (nearestHydrant != null && !showIncidentInfoCard && !isSearchOpen && !isNavigating) {
+        if (nearestHydrant != null && !showIncidentInfoCard && !isSearchOpen && !isNavigating && !showHydrantDetailsCard) {
             Card(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -11076,7 +11334,12 @@ fun MapScreen(
                                     color = Color(0xFF212121),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(start = 0.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                                        .padding(
+                                            start = 0.dp,
+                                            end = 8.dp,
+                                            top = 4.dp,
+                                            bottom = 4.dp
+                                        ),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Start
@@ -11298,6 +11561,7 @@ fun MapScreen(
                                         lastSpokenStepIndex = -1
                                         hasSpoken300m = false
                                         hasSpokenNow = false
+                                        navigateFromDirectionsCard = true   // ← ADD THIS LINE
                                         scope.launch {
                                             val bearing11 = run {
                                                 val s1 = directionsResult?.steps?.firstOrNull()?.startLocation
@@ -11474,6 +11738,7 @@ fun MapScreen(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .fillMaxWidth()
+                            .statusBarsPadding()
                             .padding(start = 12.dp, end = 12.dp),
                         color = Color(0xFF2E7D32),
                         shape = RoundedCornerShape(16.dp),
@@ -11537,11 +11802,11 @@ fun MapScreen(
                 }
 
                 // Bottom bar: distance + time + Exit
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-                color = Color.White,
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                    color = Color.White,
                     shadowElevation = 8.dp
                 ) {
                     Row(
@@ -11551,15 +11816,42 @@ fun MapScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column {
-                            var currentTimeStr by remember { mutableStateOf(
-                                java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
-                            ) }
-                            LaunchedEffect(isNavigating) {
+                        // LEFT: speed display
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .background(Color(0xFF1B5E20), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = if (userCurrentSpeed < 0f) "--" else "${userCurrentSpeed.toInt()}",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "km/h",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White
+                            )
+                        }
+
+                        Spacer(Modifier.width(12.dp))
+
+                        // MIDDLE: duration + distance + arrival
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            var arrivalTimeStr by remember { mutableStateOf("") }
+                            LaunchedEffect(isNavigating, currentStepIndex, directionsResult) {
                                 while (isNavigating) {
-                                    currentTimeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-                                        .format(java.util.Date())
-                                    kotlinx.coroutines.delay(30_000L) // refresh every 30 seconds
+                                    val steps = directionsResult?.steps ?: emptyList()
+                                    val totalSecs = steps.drop(currentStepIndex).sumOf { it.durationSeconds }
+                                    val arrivalMs = System.currentTimeMillis() + (totalSecs * 1000L)
+                                    arrivalTimeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                                        .format(java.util.Date(arrivalMs))
+                                    kotlinx.coroutines.delay(30_000L)
                                 }
                             }
 
@@ -11569,54 +11861,52 @@ fun MapScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1B5E20)
                             )
+                            val remainingDistanceText = remember(userCurrentLocation, directionsResult) {
+                                val userLoc = userCurrentLocation
+                                val points = directionsResult?.polylinePoints
+                                if (userLoc == null || points.isNullOrEmpty()) {
+                                    directionsResult?.distance ?: ""
+                                } else {
+                                    var closestIndex = 0
+                                    var minDist = Double.MAX_VALUE
+                                    points.forEachIndexed { index, point ->
+                                        val dLat = Math.toRadians(point.latitude - userLoc.latitude)
+                                        val dLon = Math.toRadians(point.longitude - userLoc.longitude)
+                                        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                                                Math.cos(Math.toRadians(userLoc.latitude)) *
+                                                Math.cos(Math.toRadians(point.latitude)) *
+                                                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+                                        val d = 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+                                        if (d < minDist) { minDist = d; closestIndex = index }
+                                    }
+                                    val remaining = points.drop(closestIndex)
+                                    var totalMeters = 0.0
+                                    for (i in 0 until remaining.size - 1) {
+                                        val p1 = remaining[i]; val p2 = remaining[i + 1]
+                                        val dLat = Math.toRadians(p2.latitude - p1.latitude)
+                                        val dLon = Math.toRadians(p2.longitude - p1.longitude)
+                                        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                                                Math.cos(Math.toRadians(p1.latitude)) *
+                                                Math.cos(Math.toRadians(p2.latitude)) *
+                                                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+                                        totalMeters += 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+                                    }
+                                    if (totalMeters < 1000) "${totalMeters.toInt()} m"
+                                    else "${"%.1f".format(totalMeters / 1000)} km"
+                                }
+                            }
                             Text(
-                                text = "${directionsResult!!.distance} • $currentTimeStr",
+                                text = "$remainingDistanceText • $arrivalTimeStr",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.Gray
                             )
                         }
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Previous step
-                            if (currentStepIndex > 0) {
-                                OutlinedButton(
-                                    onClick = { currentStepIndex-- },
-                                    shape = RoundedCornerShape(20.dp),
-                                    modifier = Modifier.size(48.dp),
-                                    contentPadding = PaddingValues(0.dp),
-                                    border = BorderStroke(1.5.dp, Color(0xFF5F6368))
-                                ) {
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.arrow_left),
-                                        contentDescription = "Previous step",
-                                        tint = Color(0xFF5F6368),
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-
-                            // Next step
-                            if (steps != null && currentStepIndex < steps.size - 1) {
-                                OutlinedButton(
-                                    onClick = { currentStepIndex++ },
-                                    shape = RoundedCornerShape(20.dp),
-                                    modifier = Modifier.size(48.dp),
-                                    contentPadding = PaddingValues(0.dp),
-                                    border = BorderStroke(1.5.dp, Color(0xFF5F6368))
-                                ) {
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.arrow_right),
-                                        contentDescription = "Next step",
-                                        tint = Color(0xFF5F6368),
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-
-                            // Exit button
+                        // Exit button
                             Button(
                                 onClick = {
                                     isNavigating = false
+                                    isOverviewMode = false  // ← ADD THIS
                                     currentStepIndex = 0
                                     navigationHydrant = null
                                     hydrantDirectionsFetched = false
@@ -11727,12 +12017,10 @@ fun MapScreen(
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
-                        }
                     }
-            }
+                }
 
                 // ── Overview / Normal View toggle button (bottom-right) ──
-                var isOverviewMode by remember { mutableStateOf(false) }
                 FloatingActionButton(
                     onClick = {
                         isOverviewMode = !isOverviewMode
@@ -11854,7 +12142,9 @@ fun MapScreen(
                 color = Color.White,
                 shadowElevation = 0.dp
             ) {
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Column(Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())) {
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -11867,6 +12157,7 @@ fun MapScreen(
                                     )
                                 )
                             )
+                            .statusBarsPadding()
                             .padding(20.dp)
                     ) {
                         Row(
@@ -11956,29 +12247,29 @@ fun MapScreen(
                                         locationSettingsOk = true
                                         triggerFindNearestHydrant = true
                                     }
-                                        .addOnFailureListener { exception ->
-                                            if (exception is com.google.android.gms.common.api.ResolvableApiException) {
-                                                try {
-                                                    pendingLocationAction = "findNearest"
-                                                    mapLocationSettingsLauncher.launch(
-                                                        androidx.activity.result.IntentSenderRequest
-                                                            .Builder(exception.resolution.intentSender).build()
-                                                    )
-                                                } catch (sendEx: android.content.IntentSender.SendIntentException) {
-                                                    android.widget.Toast.makeText(
-                                                        context,
-                                                        "Unable to get current location",
-                                                        android.widget.Toast.LENGTH_LONG
-                                                    ).show()
-                                                }
-                                            } else {
+                                    .addOnFailureListener { exception ->
+                                        if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                            try {
+                                                pendingLocationAction = "findNearest"
+                                                mapLocationSettingsLauncher.launch(
+                                                    androidx.activity.result.IntentSenderRequest
+                                                        .Builder(exception.resolution.intentSender).build()
+                                                )
+                                            } catch (sendEx: android.content.IntentSender.SendIntentException) {
                                                 android.widget.Toast.makeText(
                                                     context,
                                                     "Unable to get current location",
                                                     android.widget.Toast.LENGTH_LONG
                                                 ).show()
                                             }
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Unable to get current location",
+                                                android.widget.Toast.LENGTH_LONG
+                                            ).show()
                                         }
+                                    }
                             } else {
                                 locationPermissionLauncher.launch(
                                     arrayOf(
@@ -12068,29 +12359,29 @@ fun MapScreen(
                                         locationSettingsOk = true
                                         triggerGoToMyLocation = true
                                     }
-                                        .addOnFailureListener { exception ->
-                                            if (exception is com.google.android.gms.common.api.ResolvableApiException) {
-                                                try {
-                                                    pendingLocationAction = "goToLocation"
-                                                    mapLocationSettingsLauncher.launch(
-                                                        androidx.activity.result.IntentSenderRequest
-                                                            .Builder(exception.resolution.intentSender).build()
-                                                    )
-                                                } catch (sendEx: android.content.IntentSender.SendIntentException) {
-                                                    android.widget.Toast.makeText(
-                                                        context,
-                                                        "Unable to get current location",
-                                                        android.widget.Toast.LENGTH_LONG
-                                                    ).show()
-                                                }
-                                            } else {
+                                    .addOnFailureListener { exception ->
+                                        if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                            try {
+                                                pendingLocationAction = "goToLocation"
+                                                mapLocationSettingsLauncher.launch(
+                                                    androidx.activity.result.IntentSenderRequest
+                                                        .Builder(exception.resolution.intentSender).build()
+                                                )
+                                            } catch (sendEx: android.content.IntentSender.SendIntentException) {
                                                 android.widget.Toast.makeText(
                                                     context,
                                                     "Unable to get current location",
                                                     android.widget.Toast.LENGTH_LONG
                                                 ).show()
                                             }
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Unable to get current location",
+                                                android.widget.Toast.LENGTH_LONG
+                                            ).show()
                                         }
+                                    }
                             } else {
                                 locationPermissionLauncher.launch(
                                     arrayOf(
@@ -12169,7 +12460,9 @@ fun MapScreen(
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
                     )
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Default.LocationOn, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(24.dp))
@@ -12177,7 +12470,9 @@ fun MapScreen(
                         Text("In Service Hydrant")
                     }
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Default.LocationOn, null, tint = Color(0xFFEF5350), modifier = Modifier.size(24.dp))
@@ -12185,7 +12480,9 @@ fun MapScreen(
                         Text("Out of Service Hydrant")
                     }
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Default.LocationOn, null, tint = Color(0xFF2196F3), modifier = Modifier.size(24.dp))
@@ -12193,7 +12490,9 @@ fun MapScreen(
                         Text("Nearest Hydrant")
                     }
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -12208,7 +12507,9 @@ fun MapScreen(
                         "FireGrid v1.0.0",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
-                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .fillMaxWidth(),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
@@ -12293,12 +12594,16 @@ fun MapScreen(
                                         }
                                     }
                                 },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
                                 shape = RoundedCornerShape(10.dp),
                                 border = BorderStroke(1.dp, Color(0xFFFFCC80))
                             ) {
-                                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Column(Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp)) {
                                     // Hydrant name + live timer badge
                                     Row(
                                         Modifier.fillMaxWidth(),
@@ -12884,13 +13189,92 @@ fun FireIncidentReportDetailDialog(
     val context = LocalContext.current
     var isUpdatingLocation by remember { mutableStateOf(false) }
 
+    var pendingViewOnMapCoords by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+
+    val locationSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            // GPS turned on — now proceed
+            pendingViewOnMapCoords?.let { coords ->
+                if (isAdmin) {
+                    isUpdatingLocation = true
+                    startFirefighterLocationTracking(
+                        context = context,
+                        onLocationRequired = { isUpdatingLocation = false },
+                        onSuccess = {
+                            isUpdatingLocation = false
+                            Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                            onViewOnMap(coords.first, coords.second)
+                        },
+                        onFailure = {
+                            isUpdatingLocation = false
+                            onViewOnMap(coords.first, coords.second)
+                        }
+                    )
+                } else {
+                    onViewOnMap(coords.first, coords.second)
+                }
+                pendingViewOnMapCoords = null
+            }
+        } else {
+            isUpdatingLocation = false
+            Toast.makeText(context, "Location is required to view on map.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
-            Toast.makeText(context, "Location permission granted. Please try again.", Toast.LENGTH_SHORT).show()
+            // Permission just granted — now check if GPS is on
+            pendingViewOnMapCoords?.let { coords ->
+                val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                    priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
+                }
+                val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                    .addLocationRequest(locationRequest).setAlwaysShow(true)
+                val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+                settingsClient.checkLocationSettings(builder.build())
+                    .addOnSuccessListener {
+                        if (isAdmin) {
+                            isUpdatingLocation = true
+                            startFirefighterLocationTracking(
+                                context = context,
+                                onLocationRequired = { isUpdatingLocation = false },
+                                onSuccess = {
+                                    isUpdatingLocation = false
+                                    Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                    onViewOnMap(coords.first, coords.second)
+                                },
+                                onFailure = {
+                                    isUpdatingLocation = false
+                                    onViewOnMap(coords.first, coords.second)
+                                }
+                            )
+                        } else {
+                            onViewOnMap(coords.first, coords.second)
+                        }
+                        pendingViewOnMapCoords = null
+                    }
+                    .addOnFailureListener { exception ->
+                        if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                            try {
+                                locationSettingsLauncher.launch(
+                                    androidx.activity.result.IntentSenderRequest.Builder(
+                                        exception.resolution.intentSender
+                                    ).build()
+                                )
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Please turn on location.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+            }
+        } else {
+            Toast.makeText(context, "Location permission denied.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -13044,37 +13428,64 @@ fun FireIncidentReportDetailDialog(
             }
         },
         confirmButton = {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier
+                .fillMaxWidth()
+                .padding(top = 0.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // View on Map - STARTS CONTINUOUS TRACKING
                 if (coordinates != null) {
                     Button(
                         onClick = {
                             if (isAdmin) {
-                                // Admin: start live tracking then open map
-                                isUpdatingLocation = true
-                                startFirefighterLocationTracking(
-                                    context = context,
-                                    onLocationRequired = {
-                                        isUpdatingLocation = false
-                                        locationPermissionLauncher.launch(
-                                            arrayOf(
-                                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                                Manifest.permission.ACCESS_COARSE_LOCATION
-                                            )
+                                // Admin only: check permission → check GPS → start tracking → open map
+                                pendingViewOnMapCoords = Pair(coordinates.first, coordinates.second)
+                                if (!checkLocationPermission(context)) {
+                                    locationPermissionLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
                                         )
-                                    },
-                                    onSuccess = {
-                                        isUpdatingLocation = false
-                                        Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
-                                        onViewOnMap(coordinates.first, coordinates.second)
-                                    },
-                                    onFailure = {
-                                        isUpdatingLocation = false
-                                        onViewOnMap(coordinates.first, coordinates.second)
+                                    )
+                                } else {
+                                    val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                                        priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
                                     }
-                                )
+                                    val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                                        .addLocationRequest(locationRequest).setAlwaysShow(true)
+                                    val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+                                    settingsClient.checkLocationSettings(builder.build())
+                                        .addOnSuccessListener {
+                                            isUpdatingLocation = true
+                                            startFirefighterLocationTracking(
+                                                context = context,
+                                                onLocationRequired = { isUpdatingLocation = false },
+                                                onSuccess = {
+                                                    isUpdatingLocation = false
+                                                    Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                                    onViewOnMap(coordinates.first, coordinates.second)
+                                                },
+                                                onFailure = {
+                                                    isUpdatingLocation = false
+                                                    onViewOnMap(coordinates.first, coordinates.second)
+                                                }
+                                            )
+                                            pendingViewOnMapCoords = null
+                                        }
+                                        .addOnFailureListener { exception ->
+                                            if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                                try {
+                                                    locationSettingsLauncher.launch(
+                                                        androidx.activity.result.IntentSenderRequest.Builder(
+                                                            exception.resolution.intentSender
+                                                        ).build()
+                                                    )
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "Please turn on location.", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                }
                             } else {
-                                // Regular user: just open the map, no tracking
+                                // Regular user: just open the map, no permission or tracking needed
                                 onViewOnMap(coordinates.first, coordinates.second)
                             }
                         },
@@ -13202,7 +13613,7 @@ fun FavoritesScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(fireGradient)
-                .padding(top = 8.dp)  // Add just a small custom top padding
+                .statusBarsPadding()
                 .padding(horizontal = 14.dp)
                 .padding(bottom = 10.dp)
         ) {
@@ -13479,7 +13890,6 @@ fun ProfileScreen(
                 Button(
                     onClick = {
                         showLogoutDialog = false
-                        viewModel.signOut()
                         onLogout()
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -13525,8 +13935,9 @@ fun ProfileScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .padding(horizontal = 20.dp)
-                    .padding(top = 8.dp, bottom = 12.dp),  // Changed: removed statusBarsPadding(), added small top padding
+                    .padding(bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Start
             ) {
@@ -15124,13 +15535,18 @@ fun SettingsScreen(
                     color = Color.Transparent
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
-                                modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFFFE0B2)),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFFE0B2)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Image(painter = painterResource(id = R.drawable.change_password), contentDescription = null, modifier = Modifier.size(24.dp))
@@ -15158,13 +15574,18 @@ fun SettingsScreen(
                     color = Color.Transparent
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
-                                modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFFFCDD2)),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFFCDD2)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Image(painter = painterResource(id = R.drawable.delete_account), contentDescription = null, modifier = Modifier.size(24.dp))
@@ -15183,7 +15604,9 @@ fun SettingsScreen(
             // Admin Settings Section
             if (isCheckingAdmin) {
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(32.dp), color = Color(0xFFFF6B35))
@@ -15207,13 +15630,18 @@ fun SettingsScreen(
                         color = Color.Transparent
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
-                                    modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFC8E6C9)),
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFC8E6C9)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Image(painter = painterResource(id = R.drawable.add_admin), contentDescription = null, modifier = Modifier.size(24.dp))
@@ -15240,13 +15668,18 @@ fun SettingsScreen(
                         color = Color.Transparent
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
-                                    modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFFFCDD2)),
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFFCDD2)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Image(painter = painterResource(id = R.drawable.remove_admin), contentDescription = null, modifier = Modifier.size(24.dp))
@@ -15283,13 +15716,18 @@ fun SettingsScreen(
                     color = Color.Transparent
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
-                                modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFBBDEFB)),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFBBDEFB)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Image(painter = painterResource(id = R.drawable.notif), contentDescription = null, modifier = Modifier.size(24.dp))
@@ -15327,7 +15765,9 @@ fun SettingsScreen(
                 text = "FireGrid Version 1.0.0",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.Gray,
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
                 textAlign = TextAlign.Center
             )
         }
@@ -15556,16 +15996,23 @@ fun AddAdminScreen(
             }
         ) { padding ->
             Box(
-                modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)).padding(padding),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFFF5F5F5))
+                    .padding(padding),
                 contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text("🚫", fontSize = 64.sp)
@@ -15608,7 +16055,9 @@ fun AddAdminScreen(
         }
     ) { padding ->
         if (false) {
-            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier
+                .fillMaxSize()
+                .padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color(0xFFFF6B35))
             }
         } else {
@@ -15628,7 +16077,9 @@ fun AddAdminScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text("Promote User to Admin", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFFFF6B35))
@@ -15644,7 +16095,9 @@ fun AddAdminScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         // Email Field
@@ -15697,7 +16150,9 @@ fun AddAdminScreen(
                                     onValueChange = {},
                                     readOnly = true,
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = roleDropdownExpanded) },
-                                    modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
                                     shape = RoundedCornerShape(8.dp),
                                     colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFFFF6B35), focusedLabelColor = Color(0xFFFF6B35))
                                 )
@@ -15745,7 +16200,9 @@ fun AddAdminScreen(
                                         onValueChange = {},
                                         readOnly = true,
                                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = municipalityDropdownExpanded) },
-                                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .menuAnchor(),
                                         shape = RoundedCornerShape(8.dp),
                                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFFFF6B35), focusedLabelColor = Color(0xFFFF6B35))
                                     )
@@ -15778,7 +16235,9 @@ fun AddAdminScreen(
                                 color = Color(0xFFFFF3E0),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
-                                Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Top) {
+                                Row(modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp), verticalAlignment = Alignment.Top) {
                                     Text("ℹ️", fontSize = 20.sp)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Column {
@@ -15809,7 +16268,9 @@ fun AddAdminScreen(
                         // Error Message
                         if (errorMessage.isNotEmpty()) {
                             Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Row(modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text("⚠️", fontSize = 20.sp)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(errorMessage, color = Color(0xFFD32F2F), style = MaterialTheme.typography.bodyMedium)
@@ -15943,7 +16404,9 @@ fun AddAdminScreen(
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
                     enabled = !isLoading && email.isNotBlank() && uid.isNotBlank() && selectedRole != null && (selectedRole == AdminRole.CHIEF_ADMINISTRATOR || selectedMunicipality != null),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
                     shape = RoundedCornerShape(8.dp)
@@ -16050,16 +16513,23 @@ fun RemoveAdminScreen(
             }
         ) { padding ->
             Box(
-                modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)).padding(padding),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFFF5F5F5))
+                    .padding(padding),
                 contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text("🚫", fontSize = 64.sp)
@@ -16091,16 +16561,20 @@ fun RemoveAdminScreen(
 
                     // ALL option
                     Card(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            selectedRoleFilter = null
-                            showFilterDialog = false
-                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedRoleFilter = null
+                                showFilterDialog = false
+                            },
                         colors = CardDefaults.cardColors(
                             containerColor = if (selectedRoleFilter == null) Color(0xFFFFCDD2) else Color(0xFFF5F5F5)
                         ),
                         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                     ) {
-                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("👥", fontSize = 24.sp)
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -16113,16 +16587,20 @@ fun RemoveAdminScreen(
 
                     // CHIEF ADMIN option
                     Card(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            selectedRoleFilter = AdminRole.CHIEF_ADMINISTRATOR
-                            showFilterDialog = false
-                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedRoleFilter = AdminRole.CHIEF_ADMINISTRATOR
+                                showFilterDialog = false
+                            },
                         colors = CardDefaults.cardColors(
                             containerColor = if (selectedRoleFilter == AdminRole.CHIEF_ADMINISTRATOR) Color(0xFFFFF3E0) else Color(0xFFF5F5F5)
                         ),
                         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                     ) {
-                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("⭐", fontSize = 24.sp)
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -16135,16 +16613,20 @@ fun RemoveAdminScreen(
 
                     // MUNICIPALITY ADMIN option
                     Card(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            selectedRoleFilter = AdminRole.MUNICIPALITY_ADMIN
-                            showFilterDialog = false
-                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedRoleFilter = AdminRole.MUNICIPALITY_ADMIN
+                                showFilterDialog = false
+                            },
                         colors = CardDefaults.cardColors(
                             containerColor = if (selectedRoleFilter == AdminRole.MUNICIPALITY_ADMIN) Color(0xFFFFCDD2) else Color(0xFFF5F5F5)
                         ),
                         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                     ) {
-                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("🏛️", fontSize = 24.sp)
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -16188,7 +16670,9 @@ fun RemoveAdminScreen(
 
                     if (selectedAdmin!!.role == AdminRole.CHIEF_ADMINISTRATOR) {
                         Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFF3E0), shape = RoundedCornerShape(8.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("⚠️", fontSize = 20.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Warning: Removing a Chief Administrator!", color = Color(0xFFE65100), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
@@ -16210,7 +16694,9 @@ fun RemoveAdminScreen(
 
                     if (errorMessage.isNotEmpty()) {
                         Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("⚠️", fontSize = 20.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(errorMessage, color = Color(0xFFD32F2F), style = MaterialTheme.typography.bodyMedium)
@@ -16306,11 +16792,15 @@ fun RemoveAdminScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Card(
-                modifier = Modifier.fillMaxWidth().clickable { showFilterDialog = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showFilterDialog = true },
                 colors = CardDefaults.cardColors(containerColor = Color.White),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Remove Admin Privileges", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFFEF5350))
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
@@ -16341,11 +16831,15 @@ fun RemoveAdminScreen(
 
             // Admin List
             if (isLoadingAdmins) {
-                Box(modifier = Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Color(0xFFEF5350))
                 }
             } else if (adminsList.isEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("🔍", fontSize = 48.sp)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -16364,9 +16858,18 @@ fun RemoveAdminScreen(
                             modifier = Modifier.fillMaxWidth(),
                             color = Color.Transparent
                         ) {
-                            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(
-                                    modifier = Modifier.size(48.dp).clip(CircleShape).background(if (admin.role == AdminRole.CHIEF_ADMINISTRATOR) Color(0xFFFFF3E0) else Color(0xFFFFCDD2)),
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (admin.role == AdminRole.CHIEF_ADMINISTRATOR) Color(
+                                                0xFFFFF3E0
+                                            ) else Color(0xFFFFCDD2)
+                                        ),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (admin.role == AdminRole.CHIEF_ADMINISTRATOR) {
@@ -16748,7 +17251,9 @@ fun FireIncidentAlertDialog(
                 }
                 IconButton(
                     onClick = { if (!isUpdatingLocation) onDismiss() },
-                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp)
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 8.dp, y = (-8).dp)
                 ) {
                     Text("✕", fontSize = 24.sp, color = Color.Gray)
                 }
@@ -16770,7 +17275,9 @@ fun FireIncidentAlertDialog(
                 // Municipality
                 if (incident.municipality.isNotEmpty()) {
                     Surface(Modifier.fillMaxWidth(), color = Color(0xFFE3F2FD), shape = RoundedCornerShape(8.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("🏛️", fontSize = 20.sp)
                             Spacer(Modifier.width(8.dp))
                             Column {

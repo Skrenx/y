@@ -114,7 +114,11 @@ class FireHydrantRepository {
             }
 
             override fun onCancelled(error: DatabaseError) {
-                close(error.toException())
+                if (error.code == DatabaseError.PERMISSION_DENIED) {
+                    close() // user logged out — close cleanly, no crash
+                } else {
+                    close(error.toException())
+                }
             }
         }
 
@@ -142,7 +146,11 @@ class FireHydrantRepository {
             }
 
             override fun onCancelled(error: DatabaseError) {
-                close(error.toException())
+                if (error.code == DatabaseError.PERMISSION_DENIED) {
+                    close() // user logged out — close cleanly, no crash
+                } else {
+                    close(error.toException())
+                }
             }
         }
 
