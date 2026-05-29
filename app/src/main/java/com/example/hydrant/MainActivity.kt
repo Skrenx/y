@@ -204,9 +204,10 @@ data class DirectionStep(
     val instruction: String,
     val distance: String,
     val duration: String,
-    val durationSeconds: Int = 0,   // ← add this
+    val durationSeconds: Int = 0,
     val startLocation: LatLng,
-    val maneuver: String = ""
+    val maneuver: String = "",
+    val roadName: String = ""
 )
 
 data class DirectionsResult(
@@ -346,6 +347,13 @@ val lagunaMunicipalities = listOf(
     "San Pedro", "Santa Cruz", "Santa Maria", "Santa Rosa", "Siniloan", "Victoria"
 )
 
+fun isInternetAvailable(context: android.content.Context): Boolean {
+    val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+    val network = cm.activeNetwork ?: return false
+    val capabilities = cm.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+}
+
 // Directions API Function
 suspend fun fetchDirections(origin: LatLng, destination: LatLng): DirectionsResult? {
     val apiKey = "AIzaSyDbIT2b0NN8WPhGrpa5H29sfGSwKAzdxUs"
@@ -428,6 +436,7 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
             val stepDistance = step.getJSONObject("distance").getString("text")
             val stepDuration = step.getJSONObject("duration").getString("text")
             val stepDurationSeconds = step.getJSONObject("duration").getInt("value")  // ← add this
+            val roadName = step.optString("name", "")
             val startLoc = step.getJSONObject("start_location")
             val startLatLng = LatLng(
                 startLoc.getDouble("lat"),
@@ -440,7 +449,8 @@ fun parseDirectionsJson(json: String): DirectionsResult? {
                     duration = stepDuration,
                     durationSeconds = stepDurationSeconds,   // ← add this
                     startLocation = startLatLng,
-                    maneuver = maneuver
+                    maneuver = maneuver,
+                    roadName = roadName
                 )
             )
         }
@@ -3604,8 +3614,12 @@ fun EditFireHydrantScreen(
                 TextButton(
                     onClick = {
                         showDeleteConfirmDialog = false
-                        isDeleting = true
-                        hydrantViewModel.deleteHydrantAndRenumber(hydrant.municipality, hydrant.id)
+                        if (!isInternetAvailable(context)) {
+                            android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            isDeleting = true
+                            hydrantViewModel.deleteHydrantAndRenumber(hydrant.municipality, hydrant.id)
+                        }
                     },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = Color(0xFFEF5350)
@@ -3625,6 +3639,7 @@ fun EditFireHydrantScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -3664,6 +3679,7 @@ fun EditFireHydrantScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -3893,17 +3909,21 @@ fun EditFireHydrantScreen(
                             typeColor.isBlank() -> validationError = "Type/Color is required"
                             serviceStatus.isBlank() -> validationError = "Service status is required"
                             else -> {
-                                isUpdating = true
-                                hydrantViewModel.updateFireHydrant(
-                                    hydrant.copy(
-                                        exactLocation = exactLocation,
-                                        latitude = latitude,
-                                        longitude = longitude,
-                                        typeColor = typeColor,
-                                        serviceStatus = serviceStatus,
-                                        remarks = remarks
+                                if (!isInternetAvailable(context)) {
+                                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    isUpdating = true
+                                    hydrantViewModel.updateFireHydrant(
+                                        hydrant.copy(
+                                            exactLocation = exactLocation,
+                                            latitude = latitude,
+                                            longitude = longitude,
+                                            typeColor = typeColor,
+                                            serviceStatus = serviceStatus,
+                                            remarks = remarks
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                     },
@@ -4010,6 +4030,7 @@ fun AddFireHydrantScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -4041,6 +4062,7 @@ fun AddFireHydrantScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -4234,8 +4256,11 @@ fun AddFireHydrantScreen(
                             latitude.toDouble() < -90 || latitude.toDouble() > 90 -> validationError = "Latitude must be between -90 and 90"
                             longitude.toDouble() < -180 || longitude.toDouble() > 180 -> validationError = "Longitude must be between -180 and 180"
                             else -> {
-                                // Set flag to prevent multiple submissions
-                                isSubmitting = true
+                                if (!isInternetAvailable(context)) {
+                                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    // Set flag to prevent multiple submissions
+                                    isSubmitting = true
 
                                 // Hydrant name will be auto-generated in repository
                                 hydrantViewModel.addFireHydrant(
@@ -4248,6 +4273,7 @@ fun AddFireHydrantScreen(
                                     remarks = remarks,
                                     municipality = municipalityName
                                 )
+                                }
                             }
                         }
                     },
@@ -6060,13 +6086,18 @@ fun FireHydrantMapScreen(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
-            selectedHydrant?.let { hydrant ->
-                when (pendingAction) {
-                    "navigate" -> onNavigate(hydrant)
-                    "directions" -> onDirections(hydrant)
+            if (!isInternetAvailable(context)) {
+                pendingAction = ""
+                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                selectedHydrant?.let { hydrant ->
+                    when (pendingAction) {
+                        "navigate" -> onNavigate(hydrant)
+                        "directions" -> onDirections(hydrant)
+                    }
                 }
+                pendingAction = ""
             }
-            pendingAction = ""
         } else {
             pendingAction = ""
             android.widget.Toast.makeText(context, "Location is required", android.widget.Toast.LENGTH_SHORT).show()
@@ -6090,13 +6121,18 @@ fun FireHydrantMapScreen(
             com.google.android.gms.location.LocationServices.getSettingsClient(context)
                 .checkLocationSettings(builder.build())
                 .addOnSuccessListener {
-                    selectedHydrant?.let { hydrant ->
-                        when (pendingAction) {
-                            "navigate" -> onNavigate(hydrant)
-                            "directions" -> onDirections(hydrant)
+                    if (!isInternetAvailable(context)) {
+                        pendingAction = ""
+                        android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        selectedHydrant?.let { hydrant ->
+                            when (pendingAction) {
+                                "navigate" -> onNavigate(hydrant)
+                                "directions" -> onDirections(hydrant)
+                            }
                         }
+                        pendingAction = ""
                     }
-                    pendingAction = ""
                 }
                 .addOnFailureListener { exception ->
                     if (exception is com.google.android.gms.common.api.ResolvableApiException) {
@@ -6420,49 +6456,6 @@ fun FireHydrantMapScreen(
                 }
             }
 
-            // Zoom controls
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(
-                        end = 12.dp,
-                        bottom = if (isCardVisible) 220.dp else 16.dp
-                    ),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                FloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            val currentZoom = cameraPositionState.position.zoom
-                            cameraPositionState.animate(CameraUpdateFactory.zoomTo(currentZoom + 1f))
-                        }
-                    },
-                    modifier = Modifier.size(36.dp),
-                    containerColor = Color.White,
-                    contentColor = Color(0xFF5F6368),
-                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp, pressedElevation = 5.dp),
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(text = "+", style = MaterialTheme.typography.titleLarge, color = Color(0xFF5F6368))
-                }
-                FloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            val currentZoom = cameraPositionState.position.zoom
-                            cameraPositionState.animate(CameraUpdateFactory.zoomTo(currentZoom - 1f))
-                        }
-                    },
-                    modifier = Modifier.size(36.dp),
-                    containerColor = Color.White,
-                    contentColor = Color(0xFF5F6368),
-                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp, pressedElevation = 5.dp),
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(text = "−", style = MaterialTheme.typography.titleLarge, color = Color(0xFF5F6368))
-                }
-            }
-
 
             // CHANGED: AnimatedVisibility now uses isCardVisible + LaunchedEffect delay
             androidx.compose.animation.AnimatedVisibility(
@@ -6705,6 +6698,10 @@ fun FireHydrantMapScreen(
                     confirmButton = {
                         Button(
                             onClick = {
+                                if (!isInternetAvailable(context)) {
+                                    Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
                                 showOccupyConfirmDialog = false
                                 val newStatus = if (isOccupied) "In Service" else "Occupied"
                                 val currentUser = FirebaseAuth.getInstance().currentUser
@@ -7358,6 +7355,10 @@ fun ViewHydrantLocationScreen(
                 confirmButton = {
                     Button(
                         onClick = {
+                            if (!isInternetAvailable(context)) {
+                                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
                             showOccupyConfirmDialog = false
                             val newStatus = if (isOccupied) "In Service" else "Occupied"
                             val currentUser = FirebaseAuth.getInstance().currentUser
@@ -7532,6 +7533,7 @@ fun MapScreen(
     var showNearestDropdown by remember { mutableStateOf(false) }
     var showEmergencyDialog by remember { mutableStateOf(false) }
     var showReportFireDialog by remember { mutableStateOf(false) }
+    var pendingShowReportFireDialog by remember { mutableStateOf(false) }
     var isNavigating by remember { mutableStateOf(false) }
     var directionsFromPinpointCard by remember { mutableStateOf(false) }
     var navigateFromPinpointCard by remember { mutableStateOf(false) }
@@ -7572,6 +7574,9 @@ fun MapScreen(
 
     // Directions state
     var directionsResult by remember { mutableStateOf<DirectionsResult?>(null) }
+    var navigationDestination by remember { mutableStateOf<LatLng?>(null) }
+    var offRouteStartTime by remember { mutableStateOf(0L) }
+    var isRerouting by remember { mutableStateOf(false) }
 
 // ← Insert here:
     val remainingDuration by remember(currentStepIndex, directionsResult) {
@@ -7594,7 +7599,8 @@ fun MapScreen(
         }
     }
     var userCurrentBearing by remember { mutableStateOf(0f) }
-    var userCurrentSpeed by remember { mutableStateOf(0f) }
+    var userCurrentSpeed by remember { mutableStateOf<Float?>(null) } // null = --
+    var lastMovedTime by remember { mutableStateOf(0L) }
     var isLoadingDirections by remember { mutableStateOf(false) }
 
     // Firefighter location tracking states
@@ -7816,8 +7822,21 @@ fun MapScreen(
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             when (pendingLocationAction) {
-                "goToLocation" -> triggerGoToMyLocation = true
-                "findNearest" -> triggerFindNearestHydrant = true
+                "goToLocation" -> {
+                    if (!isInternetAvailable(context)) {
+                        android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        triggerGoToMyLocation = true
+                    }
+                }
+                "findNearest" -> {
+                    if (!isInternetAvailable(context)) {
+                        isSearchingNearestHydrant = false
+                        android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        triggerFindNearestHydrant = true
+                    }
+                }
                 "navigate" -> {
                     navigateFromPinpointCard = true
                     triggerNavigate = true
@@ -7825,6 +7844,15 @@ fun MapScreen(
                 "directions" -> triggerDirections = true
             }
             pendingLocationAction = ""
+            if (pendingShowReportFireDialog) {
+                pendingShowReportFireDialog = false
+                if (!isInternetAvailable(context)) {
+                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    showEmergencyDialog = false
+                    showReportFireDialog = true
+                }
+            }
         } else {
             val action = pendingLocationAction
             pendingLocationAction = ""
@@ -7894,7 +7922,9 @@ fun MapScreen(
     LaunchedEffect(triggerFindNearestHydrant) {
         if (triggerFindNearestHydrant) {
             triggerFindNearestHydrant = false
-            if (checkLocationPermission(context)) {
+            if (!isInternetAvailable(context)) {
+                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+            } else if (checkLocationPermission(context)) {
                 isSearchingNearestHydrant = true
                 isMyLocationEnabled = true
                 getCurrentLocationWithTimeout(
@@ -7971,8 +8001,11 @@ fun MapScreen(
         if (triggerNavigate) {
             triggerNavigate = false
             if (checkLocationPermission(context)) {
-                isLoadingDirections = true
-                getCurrentLocationWithTimeout(
+                if (!isInternetAvailable(context)) {
+                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    isLoadingDirections = true
+                    getCurrentLocationWithTimeout(
                     context = context,
                     timeoutMs = 8000L,
                     onSuccess = { location ->
@@ -7981,7 +8014,10 @@ fun MapScreen(
                         val hydrantLat = selectedHydrantForCard?.latitude?.toDoubleOrNull()
                         val hydrantLng = selectedHydrantForCard?.longitude?.toDoubleOrNull()
                         if (hydrantLat != null && hydrantLng != null) {
-                            scope.launch {
+                            if (!isInternetAvailable(context)) {
+                                isLoadingDirections = false
+                                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                            } else scope.launch {
                                 directionsResult = fetchDirections(
                                     origin = LatLng(location.latitude, location.longitude),
                                     destination = LatLng(hydrantLat, hydrantLng)
@@ -7992,6 +8028,7 @@ fun MapScreen(
                                     nearestHydrant = selectedHydrantForCard
                                     val savedPinpointHydrant = selectedHydrantForCard
                                     currentStepIndex = 0
+                                    navigationDestination = LatLng(hydrantLat, hydrantLng)
                                     isNavigating = true
                                     lastSpokenStepIndex = -1
                                     hasSpoken300m = false
@@ -8038,6 +8075,7 @@ fun MapScreen(
                         android.widget.Toast.makeText(context, "Could not get location. Try again.", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 )
+                }
             }
         }
     }
@@ -8046,18 +8084,24 @@ fun MapScreen(
         if (triggerDirections) {
             triggerDirections = false
             if (checkLocationPermission(context)) {
-                isLoadingDirections = true
-                getCurrentLocationWithTimeout(
-                    context = context,
-                    timeoutMs = 8000L,
-                    onSuccess = { location ->
-                        userCurrentLocation = LatLng(location.latitude, location.longitude)
-                        isMyLocationEnabled = true
-                        val targetHydrant = selectedHydrantForCard ?: nearestHydrant
+                if (!isInternetAvailable(context)) {
+                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    isLoadingDirections = true
+                    getCurrentLocationWithTimeout(
+                        context = context,
+                        timeoutMs = 8000L,
+                        onSuccess = { location ->
+                            userCurrentLocation = LatLng(location.latitude, location.longitude)
+                            isMyLocationEnabled = true
+                            val targetHydrant = selectedHydrantForCard ?: nearestHydrant
                         val hydrantLat = targetHydrant?.latitude?.toDoubleOrNull()
                         val hydrantLng = targetHydrant?.longitude?.toDoubleOrNull()
                         if (hydrantLat != null && hydrantLng != null) {
-                            scope.launch {
+                            if (!isInternetAvailable(context)) {
+                                isLoadingDirections = false
+                                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                            } else scope.launch {
                                 directionsResult = fetchDirections(
                                     origin = LatLng(location.latitude, location.longitude),
                                     destination = LatLng(hydrantLat, hydrantLng)
@@ -8095,6 +8139,7 @@ fun MapScreen(
                         android.widget.Toast.makeText(context, "Could not get location. Try again.", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 )
+                }
             }
         }
     }
@@ -8621,7 +8666,13 @@ fun MapScreen(
                     if (loc.hasBearing() && loc.speed > 0.5f) {
                         userCurrentBearing = loc.bearing
                     }
-                    userCurrentSpeed = if (loc.speed > 0.5f) loc.speed * 3.6f else -1f
+                    if (loc.speed > 0.5f) {
+                        userCurrentSpeed = loc.speed * 3.6f
+                        lastMovedTime = System.currentTimeMillis()
+                    } else {
+                        val idleMs = System.currentTimeMillis() - lastMovedTime
+                        userCurrentSpeed = if (lastMovedTime == 0L || idleMs >= 60_000L) null else 0f
+                    }
                 }
             }
         }
@@ -8856,6 +8907,34 @@ fun MapScreen(
                                 }
                             }
                     }
+                    "reportFire" -> {
+                        pendingLocationAction = ""
+                        val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                            priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
+                        }
+                        val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                            .addLocationRequest(locationRequest).setAlwaysShow(true)
+                        val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+                        settingsClient.checkLocationSettings(builder.build())
+                            .addOnSuccessListener {
+                                showEmergencyDialog = false
+                                showReportFireDialog = true
+                            }
+                            .addOnFailureListener { exception ->
+                                if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                    try {
+                                        pendingShowReportFireDialog = true
+                                        mapLocationSettingsLauncher.launch(
+                                            androidx.activity.result.IntentSenderRequest.Builder(
+                                                exception.resolution.intentSender
+                                            ).build()
+                                        )
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Please turn on location", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                    }
                     else -> {
                         pendingLocationAction = ""
                         getCurrentLocation(context) { location ->
@@ -8942,7 +9021,45 @@ fun MapScreen(
                     Spacer(Modifier.height(16.dp))
 
                     // Report a Fire Incident - NOW FIRST
-                    Surface(onClick = { showEmergencyDialog = false; showReportFireDialog = true }, modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
+                    Surface(onClick = {
+                        if (!isInternetAvailable(context)) {
+                            android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                        } else if (!checkLocationPermission(context)) {
+                            pendingLocationAction = "reportFire"
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        } else {
+                            val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                                priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
+                            }
+                            val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                                .addLocationRequest(locationRequest).setAlwaysShow(true)
+                            val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+                            settingsClient.checkLocationSettings(builder.build())
+                                .addOnSuccessListener {
+                                    showEmergencyDialog = false
+                                    showReportFireDialog = true
+                                }
+                                .addOnFailureListener { exception ->
+                                    if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                        try {
+                                            pendingShowReportFireDialog = true
+                                            mapLocationSettingsLauncher.launch(
+                                                androidx.activity.result.IntentSenderRequest.Builder(
+                                                    exception.resolution.intentSender
+                                                ).build()
+                                            )
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(context, "Please turn on location", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                        }
+                    }, modifier = Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
                         Row(Modifier
                             .fillMaxWidth()
                             .padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -9008,7 +9125,11 @@ fun MapScreen(
             contract = ActivityResultContracts.StartIntentSenderForResult()
         ) { result ->
             if (result.resultCode == android.app.Activity.RESULT_OK) {
-                triggerLocationFetch = true
+                if (!isInternetAvailable(context)) {
+                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    triggerLocationFetch = true
+                }
             } else {
                 // "No thanks" pressed — close fire report and go back to emergency dialog
                 isGettingLocation = false
@@ -9021,27 +9142,31 @@ fun MapScreen(
         LaunchedEffect(triggerLocationFetch) {
             if (triggerLocationFetch) {
                 triggerLocationFetch = false
-                isGettingLocation = true
-                locationError = false
-                locationDenied = false
-                getCurrentLocationWithTimeout(
-                    context = context,
-                    timeoutMs = 10000L,
-                    onSuccess = { location ->
-                        currentLocation = "Lat: %.6f, Lng: %.6f"
-                            .format(location.latitude, location.longitude)
-                        isGettingLocation = false
-                    },
-                    onTimeout = {
-                        isGettingLocation = false
-                        locationError = true
-                        android.widget.Toast.makeText(
-                            context,
-                            "Location timed out. Please try again.",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                )
+                if (!isInternetAvailable(context)) {
+                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    isGettingLocation = true
+                    locationError = false
+                    locationDenied = false
+                    getCurrentLocationWithTimeout(
+                        context = context,
+                        timeoutMs = 10000L,
+                        onSuccess = { location ->
+                            currentLocation = "Lat: %.6f, Lng: %.6f"
+                                .format(location.latitude, location.longitude)
+                            isGettingLocation = false
+                        },
+                        onTimeout = {
+                            isGettingLocation = false
+                            locationError = true
+                            android.widget.Toast.makeText(
+                                context,
+                                "Location timed out. Please try again.",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    )
+                }
             }
         }
 
@@ -9328,6 +9453,7 @@ fun MapScreen(
                         Button(
                             onClick = {
                                 when {
+                                    !isInternetAvailable(context) -> android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
                                     reporterName.isBlank() -> android.widget.Toast.makeText(context, "Please enter your name", android.widget.Toast.LENGTH_SHORT).show()
                                     reporterContact.isBlank() -> android.widget.Toast.makeText(context, "Please enter your contact number", android.widget.Toast.LENGTH_SHORT).show()
                                     reporterContact.length != 10 -> android.widget.Toast.makeText(context, "Contact number must be 10 digits", android.widget.Toast.LENGTH_SHORT).show()
@@ -9411,6 +9537,10 @@ fun MapScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        if (!isInternetAvailable(context)) {
+                            Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
                         showOccupyConfirmDialog = false
                         val newStatus = if (isOccupied) "In Service" else "Occupied"
                         val currentUser = FirebaseAuth.getInstance().currentUser
@@ -9693,6 +9823,32 @@ fun MapScreen(
                 // OFF-ROUTE threshold: if user is more than 30m away from the closest point,
                 // draw a connector line from user → closest route point (orange dashed feel, but blue)
                 val isOffRoute = userLoc != null && minDistToRoute > 30.0
+
+                // Auto-reroute after 5 seconds off-route
+                if (isOffRoute && isNavigating && !isRerouting && navigationDestination != null) {
+                    if (offRouteStartTime == 0L) {
+                        offRouteStartTime = System.currentTimeMillis()
+                    } else if (System.currentTimeMillis() - offRouteStartTime >= 5_000L) {
+                        isRerouting = true
+                        offRouteStartTime = 0L
+                        scope.launch {
+                            val newResult = fetchDirections(
+                                origin = userLoc!!,
+                                destination = navigationDestination!!
+                            )
+                            if (newResult != null) {
+                                directionsResult = newResult
+                                currentStepIndex = 0
+                                lastSpokenStepIndex = -1
+                                hasSpoken300m = false
+                                hasSpokenNow = false
+                            }
+                            isRerouting = false
+                        }
+                    }
+                } else if (!isOffRoute) {
+                    offRouteStartTime = 0L
+                }
 
                 // Blue line: remaining route from closest point → destination
                 val remainingPoints = if (userLoc != null) {
@@ -10423,7 +10579,10 @@ fun MapScreen(
                                                             userCurrentLocation = LatLng(location.latitude, location.longitude)
                                                             isMyLocationEnabled = true
                                                             isLoadingDirections = true
-                                                            scope.launch {
+                                                            if (!isInternetAvailable(context)) {
+                                                                isLoadingDirections = false
+                                                                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                                                            } else scope.launch {
                                                                 directionsResult = fetchDirections(
                                                                     origin = LatLng(location.latitude, location.longitude),
                                                                     destination = LatLng(hydrantLat, hydrantLng)
@@ -11207,7 +11366,9 @@ fun MapScreen(
                 // My Location Button
                 FloatingActionButton(
                     onClick = {
-                        if (checkLocationPermission(context)) {
+                        if (!isInternetAvailable(context)) {
+                            android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                        } else if (checkLocationPermission(context)) {
                             locationSettingsOk = false
                             cachedSettingsClient.checkLocationSettings(cachedLocationSettingsRequest)
                                 .addOnSuccessListener {
@@ -11733,7 +11894,39 @@ fun MapScreen(
             Box(modifier = Modifier.fillMaxSize()) {
 
                 // Top instruction banner (green, like Google Maps)
-                if (currentStep != null) {
+                if (isRerouting) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(start = 12.dp, end = 12.dp),
+                        color = Color(0xFF1565C0),
+                        shape = RoundedCornerShape(16.dp),
+                        shadowElevation = 12.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 18.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = "Rerouting...",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                } else if (currentStep != null) {
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -11781,21 +11974,36 @@ fun MapScreen(
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 2
                                 )
+                                val nextStep = steps.getOrNull(currentStepIndex + 1)
+                                val stepDistanceText = remember(userCurrentLocation, currentStepIndex) {
+                                    val userLoc = userCurrentLocation
+                                    val target = nextStep?.startLocation ?: currentStep.startLocation
+                                    if (userLoc == null) {
+                                        currentStep.distance
+                                    } else {
+                                        val dLat = Math.toRadians(target.latitude - userLoc.latitude)
+                                        val dLon = Math.toRadians(target.longitude - userLoc.longitude)
+                                        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                                                Math.cos(Math.toRadians(userLoc.latitude)) *
+                                                Math.cos(Math.toRadians(target.latitude)) *
+                                                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+                                        val meters = 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+                                        if (meters < 1000) "${meters.toInt()} m"
+                                        else "${"%.1f".format(meters / 1000)} km"
+                                    }
+                                }
                                 Text(
-                                    text = run {
-                                        val distStr = currentStep.distance.trim()
-                                        val kmRegex = Regex("""^([\d.]+)\s*km$""")
-                                        val match = kmRegex.find(distStr)
-                                        if (match != null) {
-                                            val km = match.groupValues[1].toDoubleOrNull()
-                                            if (km != null && km < 1.0) {
-                                                "${(km * 1000).toInt()} m"
-                                            } else distStr
-                                        } else distStr
-                                    },
+                                    text = stepDistanceText,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = Color.White.copy(alpha = 0.85f)
                                 )
+                                if (currentStep.roadName.isNotBlank()) {
+                                    Text(
+                                        text = "On ${currentStep.roadName}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White.copy(alpha = 0.7f)
+                                    )
+                                }
                             }
                         }
                     }
@@ -11824,7 +12032,7 @@ fun MapScreen(
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Text(
-                                text = if (userCurrentSpeed < 0f) "--" else "${userCurrentSpeed.toInt()}",
+                                text = if (userCurrentSpeed == null) "--" else "${userCurrentSpeed!!.toInt()}",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
@@ -12240,7 +12448,9 @@ fun MapScreen(
                             showHydrantDetailsCard = false
                             selectedHydrantForCard = null
 
-                            if (checkLocationPermission(context)) {
+                            if (!isInternetAvailable(context)) {
+                                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                            } else if (checkLocationPermission(context)) {
                                 locationSettingsOk = false
                                 cachedSettingsClient.checkLocationSettings(cachedLocationSettingsRequest)
                                     .addOnSuccessListener {
@@ -12352,7 +12562,9 @@ fun MapScreen(
                             isDrawerOpen = false
                             nearestHydrant = null
                             selectedSearchHydrant = null
-                            if (checkLocationPermission(context)) {
+                            if (!isInternetAvailable(context)) {
+                                android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                            } else if (checkLocationPermission(context)) {
                                 locationSettingsOk = false
                                 cachedSettingsClient.checkLocationSettings(cachedLocationSettingsRequest)
                                     .addOnSuccessListener {
@@ -13190,14 +13402,37 @@ fun FireIncidentReportDetailDialog(
     var isUpdatingLocation by remember { mutableStateOf(false) }
 
     var pendingViewOnMapCoords by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var pendingAcknowledge by remember { mutableStateOf(false) }
 
     val locationSettingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
+            if (!isInternetAvailable(context)) {
+                isUpdatingLocation = false
+                pendingViewOnMapCoords = null
+                pendingAcknowledge = false
+                Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+            } else if (pendingAcknowledge) {
+                pendingAcknowledge = false
+                isUpdatingLocation = true
+                startFirefighterLocationTracking(
+                    context = context,
+                    onLocationRequired = { isUpdatingLocation = false },
+                    onSuccess = {
+                        isUpdatingLocation = false
+                        Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                        onStatusChange("acknowledged")
+                    },
+                    onFailure = {
+                        isUpdatingLocation = false
+                        onStatusChange("acknowledged")
+                    }
+                )
+            } else
             // GPS turned on — now proceed
-            pendingViewOnMapCoords?.let { coords ->
-                if (isAdmin) {
+                pendingViewOnMapCoords?.let { coords ->
+                    if (isAdmin) {
                     isUpdatingLocation = true
                     startFirefighterLocationTracking(
                         context = context,
@@ -13239,7 +13474,28 @@ fun FireIncidentReportDetailDialog(
                 val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
                 settingsClient.checkLocationSettings(builder.build())
                     .addOnSuccessListener {
-                        if (isAdmin) {
+                        if (!isInternetAvailable(context)) {
+                            isUpdatingLocation = false
+                            pendingViewOnMapCoords = null
+                            pendingAcknowledge = false
+                            Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+                        } else if (pendingAcknowledge) {
+                            pendingAcknowledge = false
+                            isUpdatingLocation = true
+                            startFirefighterLocationTracking(
+                                context = context,
+                                onLocationRequired = { isUpdatingLocation = false },
+                                onSuccess = {
+                                    isUpdatingLocation = false
+                                    Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                    onStatusChange("acknowledged")
+                                },
+                                onFailure = {
+                                    isUpdatingLocation = false
+                                    onStatusChange("acknowledged")
+                                }
+                            )
+                        } else if (isAdmin) {
                             isUpdatingLocation = true
                             startFirefighterLocationTracking(
                                 context = context,
@@ -13375,28 +13631,57 @@ fun FireIncidentReportDetailDialog(
                         if (report.status == "pending") {
                             Button(
                                 onClick = {
-                                    isUpdatingLocation = true
-                                    startFirefighterLocationTracking(
-                                        context = context,
-                                        onLocationRequired = {
-                                            isUpdatingLocation = false
-                                            locationPermissionLauncher.launch(
-                                                arrayOf(
-                                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                                    Manifest.permission.ACCESS_COARSE_LOCATION
-                                                )
+                                    if (!isInternetAvailable(context)) {
+                                        Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
+                                    if (!checkLocationPermission(context)) {
+                                        pendingAcknowledge = true
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION
                                             )
-                                        },
-                                        onSuccess = {
-                                            isUpdatingLocation = false
-                                            Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
-                                            onStatusChange("acknowledged")
-                                        },
-                                        onFailure = {
-                                            isUpdatingLocation = false
-                                            onStatusChange("acknowledged")
+                                        )
+                                        return@Button
+                                    }
+                                    val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                                        priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
+                                    }
+                                    val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                                        .addLocationRequest(locationRequest).setAlwaysShow(true)
+                                    val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+                                    settingsClient.checkLocationSettings(builder.build())
+                                        .addOnSuccessListener {
+                                            isUpdatingLocation = true
+                                            startFirefighterLocationTracking(
+                                                context = context,
+                                                onLocationRequired = { isUpdatingLocation = false },
+                                                onSuccess = {
+                                                    isUpdatingLocation = false
+                                                    Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                                    onStatusChange("acknowledged")
+                                                },
+                                                onFailure = {
+                                                    isUpdatingLocation = false
+                                                    onStatusChange("acknowledged")
+                                                }
+                                            )
                                         }
-                                    )
+                                        .addOnFailureListener { exception ->
+                                            if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                                try {
+                                                    pendingAcknowledge = true
+                                                    locationSettingsLauncher.launch(
+                                                        androidx.activity.result.IntentSenderRequest.Builder(
+                                                            exception.resolution.intentSender
+                                                        ).build()
+                                                    )
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "Please turn on location", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
                                 },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFA000)),
@@ -13435,7 +13720,9 @@ fun FireIncidentReportDetailDialog(
                 if (coordinates != null) {
                     Button(
                         onClick = {
-                            if (isAdmin) {
+                            if (!isInternetAvailable(context)) {
+                                Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+                            } else if (isAdmin) {
                                 // Admin only: check permission → check GPS → start tracking → open map
                                 pendingViewOnMapCoords = Pair(coordinates.first, coordinates.second)
                                 if (!checkLocationPermission(context)) {
@@ -14802,7 +15089,6 @@ fun ContactSupportScreen(onBack: () -> Unit) {
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
 
             Text(
                 text = "We typically respond within 24-48 hours during business days.",
@@ -14832,6 +15118,7 @@ fun ReportProblemScreen(onBack: () -> Unit) {
     var isSubmitting by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
                 title = {
@@ -14883,6 +15170,8 @@ fun ReportProblemScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .background(Color(0xFFF5F5F5))
                 .padding(padding)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -14972,8 +15261,6 @@ fun ReportProblemScreen(onBack: () -> Unit) {
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
-
             // Submit Button
             Button(
                 onClick = {
@@ -14997,7 +15284,7 @@ fun ReportProblemScreen(onBack: () -> Unit) {
                                 ).show()
                                 onBack()
                             } else {
-                                Toast.makeText(
+                                Toast.  makeText(
                                     context,
                                     "Failed to submit report. Please try again.",
                                     Toast.LENGTH_LONG
@@ -16032,6 +16319,7 @@ fun AddAdminScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
                 title = {
@@ -16066,6 +16354,7 @@ fun AddAdminScreen(
                     .fillMaxSize()
                     .background(Color(0xFFF5F5F5))
                     .padding(padding)
+                    .imePadding()
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -16717,8 +17006,11 @@ fun RemoveAdminScreen(
                             adminsList.size <= 1 -> errorMessage = "Cannot remove the last admin"
                             selectedAdmin!!.role == AdminRole.CHIEF_ADMINISTRATOR && chiefAdminCount <= 1 -> errorMessage = "Cannot remove the last Chief Administrator"
                             else -> {
-                                isLoading = true
-                                errorMessage = ""
+                                if (!isInternetAvailable(context)) {
+                                    android.widget.Toast.makeText(context, "No internet connection. Please try again.", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    isLoading = true
+                                    errorMessage = ""
                                 val adminEmail = selectedAdmin!!.email
                                 val roleFolder = if (selectedAdmin!!.role == AdminRole.CHIEF_ADMINISTRATOR) "chief_admin" else "municipality_admin"
                                 val municipalityFolder = selectedAdmin!!.municipality ?: "all"
@@ -16740,6 +17032,7 @@ fun RemoveAdminScreen(
                                         isLoading = false
                                         errorMessage = "Failed to remove: ${e.message}"
                                     }
+                                }
                             }
                         }
                     },
