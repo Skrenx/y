@@ -199,6 +199,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import androidx.compose.foundation.text.ClickableText
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 
 data class DirectionStep(
     val instruction: String,
@@ -1071,6 +1074,7 @@ fun HYDRANTApp() {
                 onBackToLogin = {
                     showSignUp = false
                     isSigningUp = false
+                    signUpSuccessMessage = null   // ← ADD THIS LINE
                 },
                 onSignUpComplete = { message ->
                     signUpSuccessMessage = message
@@ -1085,6 +1089,7 @@ fun HYDRANTApp() {
             },
             onNavigateToSignUp = {
                 showSignUp = true
+                signUpSuccessMessage = null   // ← ADD THIS LINE
             },
             successMessage = signUpSuccessMessage
         )
@@ -1097,7 +1102,7 @@ fun LoginScreen(
     onNavigateToSignUp: () -> Unit,
     successMessage: String? = null
 ) {
-    val viewModel: AuthViewModel = viewModel()
+    val viewModel: AuthViewModel = viewModel(key = "login")
     val uiState by viewModel.uiState.collectAsState()
 
     var email by rememberSaveable { mutableStateOf("") }
@@ -1112,11 +1117,12 @@ fun LoginScreen(
         }
     }
 
-    val snackbarHostState = remember { SnackbarHostState() }
-
+    var showSuccessBanner by remember { mutableStateOf(successMessage != null) }
     LaunchedEffect(successMessage) {
-        successMessage?.let {
-            snackbarHostState.showSnackbar(it)
+        if (successMessage != null) {
+            showSuccessBanner = true
+            kotlinx.coroutines.delay(3000L)
+            showSuccessBanner = false
         }
     }
 
@@ -1231,7 +1237,6 @@ fun LoginScreen(
         color = MaterialTheme.colorScheme.background
     ) {
         Scaffold(
-            snackbarHost = { SnackbarHost(snackbarHostState) },
             contentWindowInsets = WindowInsets(0)
         ) { padding ->
             Box(
@@ -1289,7 +1294,37 @@ fun LoginScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(48.dp))
+                    if (showSuccessBanner && successMessage != null) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFE8F5E9),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = Color(0xFF2E7D32),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = successMessage,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color(0xFF2E7D32)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(32.dp))
+                    } else {
+                        Spacer(modifier = Modifier.height(48.dp))
+                    }
 
                     OutlinedTextField(
                         value = email,
@@ -1447,7 +1482,10 @@ fun LoginScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    TextButton(onClick = onNavigateToSignUp) {
+                    TextButton(onClick = {
+                        viewModel.clearError()
+                        onNavigateToSignUp()
+                    }) {
                         Text(
                             "Don't have an account? Sign Up",
                             style = MaterialTheme.typography.bodyMedium
@@ -1477,7 +1515,7 @@ fun SignUpScreen(
     onSignUpComplete: (String) -> Unit = {}
 ) {
     BackHandler { onBackToLogin() }
-    val viewModel: AuthViewModel = viewModel()
+    val viewModel: AuthViewModel = viewModel(key = "signup")
     val uiState by viewModel.uiState.collectAsState()
 
     var firstName by rememberSaveable { mutableStateOf("") }
@@ -1489,9 +1527,10 @@ fun SignUpScreen(
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var confirmPasswordVisible by rememberSaveable { mutableStateOf(false) }
     var localError by rememberSaveable { mutableStateOf("") }
-    var isPasswordFocused by remember { mutableStateOf(false) } // ✅ NEW: Track password field focus
+    var isPasswordFocused by remember { mutableStateOf(false) }
+    var termsAccepted by rememberSaveable { mutableStateOf(false) }
 
-    val snackbarHostState = remember { SnackbarHostState() }
+    var errorBanner by remember { mutableStateOf<String?>(null) }
 
     // Helper function to validate name fields
     fun isValidName(name: String): Boolean {
@@ -1549,8 +1588,10 @@ fun SignUpScreen(
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
-            snackbarHostState.showSnackbar(it)
+            errorBanner = it
             viewModel.clearError()
+            kotlinx.coroutines.delay(3000L)
+            errorBanner = null
         }
     }
 
@@ -1559,7 +1600,6 @@ fun SignUpScreen(
         color = MaterialTheme.colorScheme.background
     ) {
         Scaffold(
-            snackbarHost = { SnackbarHost(snackbarHostState) },
             contentWindowInsets = WindowInsets(0)
         ) { padding ->
             LazyColumn(
@@ -1617,7 +1657,39 @@ fun SignUpScreen(
 
                 item { Spacer(modifier = Modifier.height(16.dp)) }
 
-                // First Name
+// Inline error banner (replaces snackbar)
+                item {
+                    if (errorBanner != null) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFFFEBEE),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFD32F2F),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = errorBanner!!,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color(0xFFD32F2F)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+
+// First Name
                 item {
                     OutlinedTextField(
                         value = firstName,
@@ -1796,15 +1868,72 @@ fun SignUpScreen(
                     )
                 }
 
-                // ✅ MODIFIED: Only show password hint when field is focused
+                // Password requirement checklist - shown when focused
                 item {
                     AnimatedVisibility(visible = isPasswordFocused) {
-                        Text(
-                            text = "Password must have: 12 characters, 1 uppercase, 1 number, 1 special character",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "The password should have at least:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+
+                                val requirements = listOf(
+                                    Pair("12 characters", password.length >= 12),
+                                    Pair("1 uppercase", password.any { it.isUpperCase() }),
+                                    Pair("1 lowercase", password.any { it.isLowerCase() }),
+                                    Pair("1 number", password.any { it.isDigit() }),
+                                    Pair("1 special character", password.any { !it.isLetterOrDigit() })
+                                )
+
+                                requirements.forEach { (label, isMet) ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(vertical = 3.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(16.dp)
+                                                .border(
+                                                    width = 1.5.dp,
+                                                    color = if (isMet) Color(0xFF4CAF50) else Color.Gray,
+                                                    shape = RoundedCornerShape(3.dp)
+                                                )
+                                                .background(
+                                                    color = if (isMet) Color(0xFF4CAF50) else Color.Transparent,
+                                                    shape = RoundedCornerShape(3.dp)
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isMet) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (isMet) Color(0xFF4CAF50) else Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1896,7 +2025,84 @@ fun SignUpScreen(
                     }
                 }
 
-                item { Spacer(modifier = Modifier.height(24.dp)) }
+                item { Spacer(modifier = Modifier.height(12.dp)) }
+
+                // Terms and Conditions checkbox
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .border(
+                                    width = 1.5.dp,
+                                    color = if (termsAccepted) Color(0xFFFF6B35) else Color.Gray,
+                                    shape = RoundedCornerShape(4.dp)
+                                )
+                                .background(
+                                    color = if (termsAccepted) Color(0xFFFF6B35) else Color.Transparent,
+                                    shape = RoundedCornerShape(4.dp)
+                                )
+                                .clickable { termsAccepted = !termsAccepted },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (termsAccepted) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val context = LocalContext.current
+                        val annotatedText = buildAnnotatedString {
+                            withStyle(SpanStyle(color = Color.Gray, fontSize = MaterialTheme.typography.bodySmall.fontSize)) {
+                                append("I have read and agree to the ")
+                            }
+                            pushStringAnnotation(tag = "TERMS", annotation = "terms")
+                            withStyle(SpanStyle(color = Color(0xFFFF6B35), fontSize = MaterialTheme.typography.bodySmall.fontSize)) {
+                                append("Terms and Conditions")
+                            }
+                            pop()
+                            withStyle(SpanStyle(color = Color.Gray, fontSize = MaterialTheme.typography.bodySmall.fontSize)) {
+                                append(" and ")
+                            }
+                            pushStringAnnotation(tag = "PRIVACY", annotation = "privacy")
+                            withStyle(SpanStyle(color = Color(0xFFFF6B35), fontSize = MaterialTheme.typography.bodySmall.fontSize)) {
+                                append("Privacy Policy")
+                            }
+                            pop()
+                        }
+                        ClickableText(
+                            text = annotatedText,
+                            onClick = { offset ->
+                                annotatedText.getStringAnnotations(tag = "TERMS", start = offset, end = offset)
+                                    .firstOrNull()?.let {
+                                        val intent = android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://sites.google.com/view/firegrid-terms-and-conditions")
+                                        )
+                                        context.startActivity(intent)
+                                    }
+                                annotatedText.getStringAnnotations(tag = "PRIVACY", start = offset, end = offset)
+                                    .firstOrNull()?.let {
+                                        val intent = android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://sites.google.com/view/firegrid-privacy-policy")
+                                        )
+                                        context.startActivity(intent)
+                                    }
+                            }
+                        )
+                    }
+                }
+
+
+                item { Spacer(modifier = Modifier.height(16.dp)) }
 
                 item {
                     Button(
@@ -1931,6 +2137,9 @@ fun SignUpScreen(
                                 }
                                 password != confirmPassword -> {
                                     localError = "Passwords do not match"
+                                }
+                                !termsAccepted -> {
+                                    localError = "Please accept the Terms and Conditions"
                                 }
                                 else -> {
                                     val passwordValidationError = validatePassword(password)
@@ -7940,6 +8149,7 @@ fun MapScreen(
                             val lng = hydrant.longitude.toDoubleOrNull() ?: return@mapNotNull null
                             if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return@mapNotNull null
                             if (lat == 0.0 && lng == 0.0) return@mapNotNull null
+                            if (hydrant.serviceStatus != "In Service") return@mapNotNull null
 
                             val r = 6371.0
                             val dLat = Math.toRadians(lat - location.latitude)
@@ -8963,6 +9173,7 @@ fun MapScreen(
             val lat = hydrant.latitude.toDoubleOrNull() ?: return@mapNotNull null
             val lng = hydrant.longitude.toDoubleOrNull() ?: return@mapNotNull null
             if (lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat == 0.0 && lng == 0.0)) return@mapNotNull null
+            if (hydrant.serviceStatus != "In Service") return@mapNotNull null  // ✅ ADD THIS
             val distance = calculateDistance(userLat, userLng, lat, lng)
             hydrant to distance
         }.sortedBy { it.second }
@@ -13584,6 +13795,23 @@ fun FireIncidentReportDetailDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+
+                // Reporter Info
+                if (report.reporterName.isNotEmpty() || report.reporterContact.isNotEmpty()) {
+                    Surface(Modifier.fillMaxWidth(), color = Color(0xFFE3F2FD), shape = RoundedCornerShape(8.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("👤 Reporter", fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
+                            Spacer(Modifier.height(4.dp))
+                            if (report.reporterName.isNotEmpty()) {
+                                Text("Name: ${report.reporterName}", fontWeight = FontWeight.Medium)
+                            }
+                            if (report.reporterContact.isNotEmpty()) {
+                                Text("Contact: ${report.reporterContact}", color = Color(0xFF1565C0))
+                            }
+                        }
+                    }
+                }
+
                 // Reporter Location
                 if (report.reporterCurrentLocation.isNotEmpty()) {
                     Surface(Modifier.fillMaxWidth(), color = Color(0xFFE8F5E9), shape = RoundedCornerShape(8.dp)) {
@@ -13594,6 +13822,7 @@ fun FireIncidentReportDetailDialog(
                         }
                     }
                 }
+
 
                 // Fire Location
                 Surface(Modifier.fillMaxWidth(), color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp)) {
@@ -17347,13 +17576,71 @@ fun ChangePasswordDialog(
                     )
                 )
 
-// Password requirements hint - only show when focused
+// Password requirements checklist - only show when focused
                 if (isNewPasswordFocused) {
-                    Text(
-                        text = "Must have: 12 chars, 1 uppercase, 1 number, 1 special char",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
-                    )
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "The new password should have at least:",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+
+                            val requirements = listOf(
+                                Pair("12 characters", newPassword.length >= 12),
+                                Pair("1 uppercase", newPassword.any { it.isUpperCase() }),
+                                Pair("1 lowercase", newPassword.any { it.isLowerCase() }),
+                                Pair("1 number", newPassword.any { it.isDigit() }),
+                                Pair("1 special character", newPassword.any { !it.isLetterOrDigit() })
+                            )
+
+                            requirements.forEach { (label, isMet) ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(vertical = 3.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .border(
+                                                width = 1.5.dp,
+                                                color = if (isMet) Color(0xFF4CAF50) else Color.Gray,
+                                                shape = RoundedCornerShape(3.dp)
+                                            )
+                                            .background(
+                                                color = if (isMet) Color(0xFF4CAF50) else Color.Transparent,
+                                                shape = RoundedCornerShape(3.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isMet) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(11.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (isMet) Color(0xFF4CAF50) else Color.Gray
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Confirm New Password
@@ -17516,6 +17803,65 @@ fun FireIncidentAlertDialog(
     val context = LocalContext.current
     var isAcknowledged by remember { mutableStateOf(false) }
     var isUpdatingLocation by remember { mutableStateOf(false) }
+    var pendingAcknowledge by remember { mutableStateOf(false) }
+    var pendingGoToLocation by remember { mutableStateOf(false) }
+
+    val locationSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            if (!isInternetAvailable(context)) {
+                isUpdatingLocation = false
+                pendingAcknowledge = false
+                pendingGoToLocation = false
+                Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+            } else {
+                when {
+                    pendingAcknowledge -> {
+                        pendingAcknowledge = false
+                        isUpdatingLocation = true
+                        startFirefighterLocationTracking(
+                            context = context,
+                            onLocationRequired = { isUpdatingLocation = false },
+                            onSuccess = {
+                                isUpdatingLocation = false
+                                Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                onAcknowledge()
+                                isAcknowledged = true
+                            },
+                            onFailure = {
+                                isUpdatingLocation = false
+                                onAcknowledge()
+                                isAcknowledged = true
+                            }
+                        )
+                    }
+                    pendingGoToLocation -> {
+                        pendingGoToLocation = false
+                        isUpdatingLocation = true
+                        startFirefighterLocationTracking(
+                            context = context,
+                            onLocationRequired = { isUpdatingLocation = false },
+                            onSuccess = {
+                                isUpdatingLocation = false
+                                Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                onGoToLocation()
+                            },
+                            onFailure = {
+                                isUpdatingLocation = false
+                                onGoToLocation()
+                            }
+                        )
+                    }
+                }
+            }
+        } else {
+            isUpdatingLocation = false
+            pendingAcknowledge = false
+            pendingGoToLocation = false
+            Toast.makeText(context, "Location is required for this feature.", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -17523,7 +17869,68 @@ fun FireIncidentAlertDialog(
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
-            Toast.makeText(context, "Location permission granted. Please try again.", Toast.LENGTH_SHORT).show()
+            val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
+            }
+            val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                .addLocationRequest(locationRequest).setAlwaysShow(true)
+            val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+            settingsClient.checkLocationSettings(builder.build())
+                .addOnSuccessListener {
+                    when {
+                        pendingAcknowledge -> {
+                            pendingAcknowledge = false
+                            isUpdatingLocation = true
+                            startFirefighterLocationTracking(
+                                context = context,
+                                onLocationRequired = { isUpdatingLocation = false },
+                                onSuccess = {
+                                    isUpdatingLocation = false
+                                    Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                    onAcknowledge()
+                                    isAcknowledged = true
+                                },
+                                onFailure = {
+                                    isUpdatingLocation = false
+                                    onAcknowledge()
+                                    isAcknowledged = true
+                                }
+                            )
+                        }
+                        pendingGoToLocation -> {
+                            pendingGoToLocation = false
+                            isUpdatingLocation = true
+                            startFirefighterLocationTracking(
+                                context = context,
+                                onLocationRequired = { isUpdatingLocation = false },
+                                onSuccess = {
+                                    isUpdatingLocation = false
+                                    Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                    onGoToLocation()
+                                },
+                                onFailure = {
+                                    isUpdatingLocation = false
+                                    onGoToLocation()
+                                }
+                            )
+                        }
+                    }
+                }
+                .addOnFailureListener { exception ->
+                    if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                        try {
+                            locationSettingsLauncher.launch(
+                                androidx.activity.result.IntentSenderRequest.Builder(
+                                    exception.resolution.intentSender
+                                ).build()
+                            )
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Please turn on location.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+        } else {
+            Toast.makeText(context, "Location permission denied.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -17629,28 +18036,57 @@ fun FireIncidentAlertDialog(
                 // Go to Location - STARTS CONTINUOUS TRACKING
                 Button(
                     onClick = {
-                        isUpdatingLocation = true
-                        startFirefighterLocationTracking(
-                            context = context,
-                            onLocationRequired = {
-                                isUpdatingLocation = false
-                                locationPermissionLauncher.launch(
-                                    arrayOf(
-                                        Manifest.permission.ACCESS_FINE_LOCATION,
-                                        Manifest.permission.ACCESS_COARSE_LOCATION
-                                    )
+                        if (!isInternetAvailable(context)) {
+                            Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        if (!checkLocationPermission(context)) {
+                            pendingGoToLocation = true
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
                                 )
-                            },
-                            onSuccess = {
-                                isUpdatingLocation = false
-                                Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
-                                onGoToLocation()
-                            },
-                            onFailure = {
-                                isUpdatingLocation = false
-                                onGoToLocation()
+                            )
+                            return@Button
+                        }
+                        val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                            priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
+                        }
+                        val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                            .addLocationRequest(locationRequest).setAlwaysShow(true)
+                        val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+                        settingsClient.checkLocationSettings(builder.build())
+                            .addOnSuccessListener {
+                                isUpdatingLocation = true
+                                startFirefighterLocationTracking(
+                                    context = context,
+                                    onLocationRequired = { isUpdatingLocation = false },
+                                    onSuccess = {
+                                        isUpdatingLocation = false
+                                        Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                        onGoToLocation()
+                                    },
+                                    onFailure = {
+                                        isUpdatingLocation = false
+                                        onGoToLocation()
+                                    }
+                                )
                             }
-                        )
+                            .addOnFailureListener { exception ->
+                                if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                    try {
+                                        pendingGoToLocation = true
+                                        locationSettingsLauncher.launch(
+                                            androidx.activity.result.IntentSenderRequest.Builder(
+                                                exception.resolution.intentSender
+                                            ).build()
+                                        )
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Please turn on location.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
                     modifier = Modifier.fillMaxWidth(),
@@ -17667,30 +18103,59 @@ fun FireIncidentAlertDialog(
                 if (!isAcknowledged) {
                     Button(
                         onClick = {
-                            isUpdatingLocation = true
-                            startFirefighterLocationTracking(
-                                context = context,
-                                onLocationRequired = {
-                                    isUpdatingLocation = false
-                                    locationPermissionLauncher.launch(
-                                        arrayOf(
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION
-                                        )
+                            if (!isInternetAvailable(context)) {
+                                Toast.makeText(context, "No internet connection. Please try again.", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            if (!checkLocationPermission(context)) {
+                                pendingAcknowledge = true
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
                                     )
-                                },
-                                onSuccess = {
-                                    isUpdatingLocation = false
-                                    Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
-                                    onAcknowledge()
-                                    isAcknowledged = true
-                                },
-                                onFailure = {
-                                    isUpdatingLocation = false
-                                    onAcknowledge()
-                                    isAcknowledged = true
+                                )
+                                return@Button
+                            }
+                            val locationRequest = com.google.android.gms.location.LocationRequest.create().apply {
+                                priority = com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
+                            }
+                            val builder = com.google.android.gms.location.LocationSettingsRequest.Builder()
+                                .addLocationRequest(locationRequest).setAlwaysShow(true)
+                            val settingsClient = com.google.android.gms.location.LocationServices.getSettingsClient(context)
+                            settingsClient.checkLocationSettings(builder.build())
+                                .addOnSuccessListener {
+                                    isUpdatingLocation = true
+                                    startFirefighterLocationTracking(
+                                        context = context,
+                                        onLocationRequired = { isUpdatingLocation = false },
+                                        onSuccess = {
+                                            isUpdatingLocation = false
+                                            Toast.makeText(context, "📍 Location tracking started", Toast.LENGTH_SHORT).show()
+                                            onAcknowledge()
+                                            isAcknowledged = true
+                                        },
+                                        onFailure = {
+                                            isUpdatingLocation = false
+                                            onAcknowledge()
+                                            isAcknowledged = true
+                                        }
+                                    )
                                 }
-                            )
+                                .addOnFailureListener { exception ->
+                                    if (exception is com.google.android.gms.common.api.ResolvableApiException) {
+                                        try {
+                                            pendingAcknowledge = true
+                                            locationSettingsLauncher.launch(
+                                                androidx.activity.result.IntentSenderRequest.Builder(
+                                                    exception.resolution.intentSender
+                                                ).build()
+                                            )
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Please turn on location.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
                         modifier = Modifier.fillMaxWidth(),
