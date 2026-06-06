@@ -9955,20 +9955,12 @@ fun MapScreen(
                                 showHydrantDetailsCard = false
                                 isCardVisible = false
                             } else if (isNearestOrSearchHydrantShowing) {
-                                // If clicking a DIFFERENT hydrant while a card is showing:
-                                // 1. Save and close the nearest/search hydrant card
-                                savedNearestHydrant = nearestHydrant
-                                savedNearestHydrantDistance = nearestHydrantDistance
-                                nearestHydrant = null
-                                selectedSearchHydrant = null
-                                directionsResult = null
-                                selectedSearchHydrantDistance = null
-
-                                // 2. Show the new hydrant's details card
+                                // If clicking a DIFFERENT hydrant while the nearest/search card is showing,
+                                // only show the info window — do NOT open the full details card
                                 selectedHydrantMarker = hydrant
-                                selectedHydrantForCard = hydrant
-                                showHydrantDetailsCard = true
-                                isCardVisible = true
+                                selectedHydrantForCard = null
+                                showHydrantDetailsCard = false
+                                isCardVisible = false
                             } else {
                                 // Normal behavior - no cards showing, so show both info window and card
                                 selectedHydrantMarker = hydrant
